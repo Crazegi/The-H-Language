@@ -118,7 +118,7 @@
     },
     "keywords": {
       "name": "keyword.control.hlang",
-      "match": "\\b(section|fn|own|ref|print|if|else|while|return)\\b"
+      "match": "\\b(section|fn|own|ref|const|unused|print|if|else|while|repeat|for|in|return|interrupt|yield|to|contract|execute|import)\\b"
     },
     "types": {
       "name": "storage.type.hlang",

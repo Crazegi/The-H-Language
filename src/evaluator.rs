@@ -118,6 +118,11 @@ impl Runtime {
 
     fn execute_stmt(&self, stmt: &Stmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
         match stmt {
+            Stmt::ConstDecl { name, expr, .. } => {
+                let value = self.eval_expr(expr, frame)?;
+                frame.vars.insert(name.clone(), value);
+                Ok(Flow::Continue)
+            }
             Stmt::OwnDecl { name, expr, .. } => {
                 let value = self.eval_expr(expr, frame)?;
                 frame.vars.insert(name.clone(), value);

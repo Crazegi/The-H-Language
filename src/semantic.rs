@@ -206,6 +206,7 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
         let mut symbols: HashSet<String> = f.params.iter().cloned().collect();
         let mut refs: HashSet<String> = HashSet::new();
         let mut declared_symbols: HashMap<String, Span> = HashMap::new();
+        let mut suppress_unused_symbols: HashSet<String> = HashSet::new();
         for p in &f.params {
             declared_symbols.insert(p.clone(), f.span);
         }
@@ -236,6 +237,7 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
                 &signatures,
                 &imported_modules,
                 &mut declared_symbols,
+                &mut suppress_unused_symbols,
                 &mut used_symbols,
                 source,
             )?;
@@ -243,6 +245,9 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
 
         for (symbol, span) in declared_symbols {
             if symbol.starts_with('_') {
+                continue;
+            }
+            if suppress_unused_symbols.contains(&symbol) {
                 continue;
             }
             if !used_symbols.contains(&symbol) {
@@ -288,12 +293,54 @@ fn analyze_stmt(
     signatures: &HashMap<String, usize>,
     imported_modules: &HashSet<String>,
     declared_symbols: &mut HashMap<String, Span>,
+    suppress_unused_symbols: &mut HashSet<String>,
     used_symbols: &mut HashSet<String>,
     source: &str,
 ) -> Result<(), SemanticError> {
     let stmt_span = stmt.span();
     match stmt {
-        Stmt::OwnDecl { name, expr, .. } => {
+        Stmt::ConstDecl {
+            name,
+            expr,
+            suppress_unused_warning,
+            ..
+        } => {
+            if symbols.contains(name) {
+                return Err(SemanticError::at(
+                    stmt_span,
+                    source,
+                    format!("`{}` already declared in this function", name),
+                ));
+            }
+            if !is_literal_const_expr(expr) {
+                return Err(SemanticError::at(
+                    stmt_span,
+                    source,
+                    "Const declarations currently require literal values",
+                ));
+            }
+            analyze_expr(
+                expr,
+                symbols,
+                data,
+                signatures,
+                imported_modules,
+                used_symbols,
+                source,
+            )?;
+            symbols.insert(name.clone());
+            refs.insert(name.clone());
+            declared_symbols.insert(name.clone(), stmt_span);
+            if *suppress_unused_warning {
+                suppress_unused_symbols.insert(name.clone());
+            }
+        }
+        Stmt::OwnDecl {
+            name,
+            expr,
+            suppress_unused_warning,
+            ..
+        } => {
             if symbols.contains(name) {
                 return Err(SemanticError::at(
                     stmt_span,
@@ -312,8 +359,16 @@ fn analyze_stmt(
             )?;
             symbols.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            if *suppress_unused_warning {
+                suppress_unused_symbols.insert(name.clone());
+            }
         }
-        Stmt::RefDecl { name, target, .. } => {
+        Stmt::RefDecl {
+            name,
+            target,
+            suppress_unused_warning,
+            ..
+        } => {
             if symbols.contains(name) {
                 return Err(SemanticError::at(
                     stmt_span,
@@ -343,6 +398,9 @@ fn analyze_stmt(
             symbols.insert(name.clone());
             refs.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            if *suppress_unused_warning {
+                suppress_unused_symbols.insert(name.clone());
+            }
         }
         Stmt::PortOwn { port, .. } => {
             if is_interrupt_fn {
@@ -429,6 +487,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -446,7 +505,7 @@ fn analyze_stmt(
                 return Err(SemanticError::at(
                     stmt_span,
                     source,
-                    format!("Cannot assign to reference binding `{}`", name),
+                    format!("Cannot assign to immutable binding `{}`", name),
                 ));
             }
             analyze_expr(
@@ -487,7 +546,7 @@ fn analyze_stmt(
                 return Err(SemanticError::at(
                     stmt_span,
                     source,
-                    format!("Instruction target `{}` cannot be a reference", target),
+                    format!("Instruction target `{}` cannot be immutable", target),
                 ));
             }
             if !is_memory_target(target) && !matches!(op, crate::ast::Instruction::Mov) {
@@ -533,6 +592,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -552,6 +612,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -584,6 +645,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -614,6 +676,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -658,6 +721,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -693,6 +757,7 @@ fn analyze_stmt(
                     signatures,
                     imported_modules,
                     declared_symbols,
+                    suppress_unused_symbols,
                     used_symbols,
                     source,
                 )?;
@@ -1100,6 +1165,7 @@ fn collect_yield_grants_stmt(
 fn is_execute_stmt_shape_supported(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Instruction { .. }
+        | Stmt::ConstDecl { .. }
         | Stmt::OwnDecl { .. }
         | Stmt::Assign { .. }
         | Stmt::PortOwn { .. }
@@ -1115,6 +1181,13 @@ fn is_execute_stmt_shape_supported(stmt: &Stmt) -> bool {
         Stmt::Repeat { body, .. } => body.iter().all(is_execute_stmt_shape_supported),
         _ => false,
     }
+}
+
+fn is_literal_const_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Number(..) | Expr::String(..) | Expr::Bool(..) | Expr::Maybe(_)
+    )
 }
 
 fn source_line_for(source: &str, line: usize) -> Option<String> {

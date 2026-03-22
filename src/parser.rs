@@ -1,4 +1,7 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::ast::{
     BinaryOp, ContractPolicy, CycleContract, Expr, Function, Instruction, Program, Stmt, UnaryOp,
@@ -126,9 +129,12 @@ impl Parser {
 
     fn parse_import_stmt(&mut self) -> Result<(String, crate::token::Span), ParseError> {
         let span = self.previous().span;
-        let module = self
-            .expect_identifier_like("Expected module name after `import`")?
-            .lexeme;
+        let module = if self.match_kind(TokenKind::String) {
+            self.previous().lexeme.clone()
+        } else {
+            self.expect_identifier_like("Expected module name or path string after `import`")?
+                .lexeme
+        };
         self.consume_stmt_terminator();
         Ok((module, span))
     }
@@ -163,6 +169,24 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        let suppress_unused_warning = self.match_kind(TokenKind::KeywordUnused);
+
+        if self.match_kind(TokenKind::KeywordConst) {
+            let span = self.previous().span;
+            let name = self
+                .expect_identifier_like("Expected identifier after `const`")?
+                .lexeme;
+            self.expect(TokenKind::Assign, "Expected `=` in const declaration")?;
+            let expr = self.parse_expression()?;
+            self.consume_stmt_terminator();
+            return Ok(Stmt::ConstDecl {
+                name,
+                expr,
+                suppress_unused_warning,
+                span,
+            });
+        }
+
         if self.check(TokenKind::KeywordInt)
             || self.check(TokenKind::KeywordString)
             || self.check(TokenKind::KeywordBool)
@@ -175,6 +199,7 @@ impl Parser {
             return Ok(Stmt::OwnDecl {
                 name,
                 expr,
+                suppress_unused_warning,
                 span: decl_tok.span,
             });
         }
@@ -182,6 +207,12 @@ impl Parser {
         if self.match_kind(TokenKind::KeywordOwn) {
             let span = self.previous().span;
             if self.match_kind(TokenKind::LBracket) {
+                if suppress_unused_warning {
+                    return Err(ParseError::new(
+                        self.previous(),
+                        "`unused` can only be applied to variable declarations",
+                    ));
+                }
                 let port = self
                     .expect_identifier_like("Expected port identifier after `own [`")?
                     .lexeme;
@@ -194,12 +225,23 @@ impl Parser {
             self.expect(TokenKind::Assign, "Expected `=` in own declaration")?;
             let expr = self.parse_expression()?;
             self.consume_stmt_terminator();
-            return Ok(Stmt::OwnDecl { name, expr, span });
+            return Ok(Stmt::OwnDecl {
+                name,
+                expr,
+                suppress_unused_warning,
+                span,
+            });
         }
 
         if self.match_kind(TokenKind::KeywordRef) {
             let span = self.previous().span;
             if self.match_kind(TokenKind::LBracket) {
+                if suppress_unused_warning {
+                    return Err(ParseError::new(
+                        self.previous(),
+                        "`unused` can only be applied to variable declarations",
+                    ));
+                }
                 let port = self
                     .expect_identifier_like("Expected port identifier after `ref [`")?
                     .lexeme;
@@ -221,7 +263,19 @@ impl Parser {
                 self.expect_identifier_like("Expected referenced identifier")?.lexeme
             };
             self.consume_stmt_terminator();
-            return Ok(Stmt::RefDecl { name, target, span });
+            return Ok(Stmt::RefDecl {
+                name,
+                target,
+                suppress_unused_warning,
+                span,
+            });
+        }
+
+        if suppress_unused_warning {
+            return Err(ParseError::new(
+                self.peek(),
+                "`unused` can only be applied to variable declarations",
+            ));
         }
 
         if self.match_kind(TokenKind::KeywordIf) {
@@ -956,6 +1010,148 @@ impl Parser {
 pub fn parse_source(source: &str) -> Result<Program, ParseError> {
     let mut parser = Parser::from_source(source)?;
     parser.parse_program()
+}
+
+pub fn parse_source_from_path(path: &Path) -> Result<Program, ParseError> {
+    let root = canonicalize_existing(path)?;
+    let mut visited = HashSet::new();
+    let mut stack = Vec::new();
+    parse_source_from_path_inner(&root, &mut visited, &mut stack)
+}
+
+fn parse_source_from_path_inner(
+    path: &Path,
+    visited: &mut HashSet<PathBuf>,
+    stack: &mut Vec<PathBuf>,
+) -> Result<Program, ParseError> {
+    if stack.iter().any(|p| p == path) {
+        let mut chain = stack
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        chain.push(path.to_string_lossy().to_string());
+        return Err(ParseError {
+            line: 1,
+            column: 1,
+            message: format!("Import cycle detected: {}", chain.join(" -> ")),
+        });
+    }
+
+    if visited.contains(path) {
+        return Ok(Program {
+            data: BTreeMap::new(),
+            imports: Vec::new(),
+            import_spans: Vec::new(),
+            functions: Vec::new(),
+            source: String::new(),
+        });
+    }
+
+    visited.insert(path.to_path_buf());
+    stack.push(path.to_path_buf());
+
+    let source = fs::read_to_string(path).map_err(|e| ParseError {
+        line: 1,
+        column: 1,
+        message: format!("Failed to read `{}`: {}", path.display(), e),
+    })?;
+    let mut local = parse_source(&source)?;
+
+    let mut merged = Program {
+        data: BTreeMap::new(),
+        imports: Vec::new(),
+        import_spans: Vec::new(),
+        functions: Vec::new(),
+        source: local.source.clone(),
+    };
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    for (idx, import) in local.imports.iter().enumerate() {
+        let span = local
+            .import_spans
+            .get(idx)
+            .copied()
+            .unwrap_or(crate::token::Span { line: 1, column: 1 });
+        if is_file_import_spec(import) {
+            let child = resolve_import_path(parent, import)?;
+            let child_program = parse_source_from_path_inner(&child, visited, stack)?;
+            merge_programs(&mut merged, child_program)?;
+        } else if !merged.imports.iter().any(|m| m == import) {
+            merged.imports.push(import.clone());
+            merged.import_spans.push(span);
+        }
+    }
+
+    // Path imports are resolved recursively here, so only canonicalized module imports
+    // should remain in the merged program import list.
+    local.imports.clear();
+    local.import_spans.clear();
+
+    merge_programs(&mut merged, std::mem::replace(&mut local, Program {
+        data: BTreeMap::new(),
+        imports: Vec::new(),
+        import_spans: Vec::new(),
+        functions: Vec::new(),
+        source: String::new(),
+    }))?;
+
+    stack.pop();
+    Ok(merged)
+}
+
+fn merge_programs(target: &mut Program, mut incoming: Program) -> Result<(), ParseError> {
+    for (name, expr) in incoming.data {
+        if target.data.contains_key(&name) {
+            return Err(ParseError {
+                line: 1,
+                column: 1,
+                message: format!("Duplicate data symbol `{}` across imported modules", name),
+            });
+        }
+        target.data.insert(name, expr);
+    }
+
+    for module in incoming.imports.drain(..) {
+        if !target.imports.iter().any(|m| m == &module) {
+            target.imports.push(module);
+            target.import_spans.push(crate::token::Span { line: 1, column: 1 });
+        }
+    }
+
+    for function in incoming.functions {
+        if target.functions.iter().any(|f| f.name == function.name) {
+            return Err(ParseError {
+                line: function.span.line,
+                column: function.span.column,
+                message: format!("Duplicate function `{}` across imported modules", function.name),
+            });
+        }
+        target.functions.push(function);
+    }
+
+    Ok(())
+}
+
+fn is_file_import_spec(spec: &str) -> bool {
+    spec.ends_with(".hl") || spec.contains('/') || spec.contains('\\') || spec.starts_with('.')
+}
+
+fn resolve_import_path(base_dir: &Path, spec: &str) -> Result<PathBuf, ParseError> {
+    let raw = Path::new(spec);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base_dir.join(raw)
+    };
+    canonicalize_existing(&joined)
+}
+
+fn canonicalize_existing(path: &Path) -> Result<PathBuf, ParseError> {
+    fs::canonicalize(path).map_err(|e| ParseError {
+        line: 1,
+        column: 1,
+        message: format!("Failed to resolve path `{}`: {}", path.display(), e),
+    })
 }
 
 fn parse_int_literal(lexeme: &str) -> Option<i64> {

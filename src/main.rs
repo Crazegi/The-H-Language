@@ -3,8 +3,10 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Parser, ValueEnum};
 use hl_lexer::{
-    analyze_with_warnings, compile_h_to_native_artifacts_with_options, compile_program_with_options,
+    analyze_with_warnings, compile_h_file_to_native_artifacts_with_options,
+    compile_h_to_native_artifacts_with_options, compile_program_with_options,
     diagnose_cycle_profile_coverage, disassemble, load_cycle_profiles_from_file, parse_source,
+    parse_source_from_path,
     read_package, render_contract_report_text, render_profile_doctor_report_text, run_bytecode,
     run_program, write_package, CompileOptions, CycleProfile, Lexer, OptimizationLevel, TokenKind,
     UnknownCycleCostPolicy,
@@ -264,6 +266,14 @@ fn main() {
         None => SAMPLE.to_string(),
     };
 
+    let parse_program = |input_text: &str| {
+        if let Some(path) = input_path.as_ref() {
+            parse_source_from_path(std::path::Path::new(path))
+        } else {
+            parse_source(input_text)
+        }
+    };
+
     match mode {
         Mode::Tokens => {
             let mut lexer = Lexer::new(&input);
@@ -289,7 +299,7 @@ fn main() {
                 }
             }
         }
-        Mode::Ast => match parse_source(&input) {
+        Mode::Ast => match parse_program(&input) {
             Ok(program) => println!("{:#?}", program),
             Err(err) => {
                 eprintln!("Parse error: {}", err);
@@ -297,7 +307,7 @@ fn main() {
             }
         },
         Mode::Compile => {
-            let program = match parse_source(&input) {
+            let program = match parse_program(&input) {
                 Ok(p) => p,
                 Err(err) => {
                     eprintln!("Parse error: {}", err);
@@ -347,7 +357,7 @@ fn main() {
             }
         }
         Mode::ProfileDoctor => {
-            let program = match parse_source(&input) {
+            let program = match parse_program(&input) {
                 Ok(p) => p,
                 Err(err) => {
                     eprintln!("Parse error: {}", err);
@@ -381,7 +391,7 @@ fn main() {
             }
         }
         Mode::Pack => {
-            let program = match parse_source(&input) {
+            let program = match parse_program(&input) {
                 Ok(p) => p,
                 Err(err) => {
                     eprintln!("Parse error: {}", err);
@@ -469,7 +479,7 @@ fn main() {
             }
         }
         Mode::Vm => {
-            let program = match parse_source(&input) {
+            let program = match parse_program(&input) {
                 Ok(p) => p,
                 Err(err) => {
                     eprintln!("Parse error: {}", err);
@@ -516,7 +526,7 @@ fn main() {
             }
         }
         Mode::Run => {
-            let program = match parse_source(&input) {
+            let program = match parse_program(&input) {
                 Ok(p) => p,
                 Err(err) => {
                     eprintln!("Parse error: {}", err);
@@ -548,9 +558,9 @@ fn main() {
             let bin_path = match out_path {
                 Some(path) => PathBuf::from(path),
                 None => {
-                    let mut default_name = match input_path {
+                    let mut default_name = match input_path.as_ref() {
                         Some(p) => {
-                            let stem = std::path::Path::new(&p)
+                            let stem = std::path::Path::new(p)
                                 .file_stem()
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("a.out");
@@ -565,7 +575,17 @@ fn main() {
                 }
             };
 
-            match compile_h_to_native_artifacts_with_options(&input, &bin_path, compile_options) {
+            let native_result = if let Some(path) = input_path.as_ref() {
+                compile_h_file_to_native_artifacts_with_options(
+                    std::path::Path::new(path),
+                    &bin_path,
+                    compile_options,
+                )
+            } else {
+                compile_h_to_native_artifacts_with_options(&input, &bin_path, compile_options)
+            };
+
+            match native_result {
                 Ok(artifacts) => {
                     println!("native_object: {}", artifacts.object_path.display());
                     println!("native_binary: {}", artifacts.executable_path.display());

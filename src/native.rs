@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::bytecode::{BytecodeProgram, Instruction};
 use crate::compiler::{compile_program_with_options, CompileOptions};
 use crate::evaluator::Value;
-use crate::parser::parse_source;
+use crate::parser::{parse_source, parse_source_from_path};
 use crate::semantic::analyze_with_warnings;
 
 #[derive(Debug, Clone)]
@@ -63,6 +63,24 @@ pub fn compile_h_to_native_artifacts_with_options(
     options: CompileOptions,
 ) -> Result<NativeBuildArtifacts, NativeCompileError> {
     let program = parse_source(source).map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
+    compile_program_to_native_artifacts(program, output_path, options)
+}
+
+pub fn compile_h_file_to_native_artifacts_with_options(
+    source_path: &Path,
+    output_path: &Path,
+    options: CompileOptions,
+) -> Result<NativeBuildArtifacts, NativeCompileError> {
+    let program = parse_source_from_path(source_path)
+        .map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
+    compile_program_to_native_artifacts(program, output_path, options)
+}
+
+fn compile_program_to_native_artifacts(
+    program: crate::ast::Program,
+    output_path: &Path,
+    options: CompileOptions,
+) -> Result<NativeBuildArtifacts, NativeCompileError> {
     analyze_with_warnings(&program)
         .map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
     let bytecode = compile_program_with_options(&program, options)
@@ -293,6 +311,8 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("fn ensure_handle_prefix(handle: &str, prefix: &str, builtin_name: &str) -> Result<(), String> { if handle.starts_with(prefix) { Ok(()) } else { Err(format!(\"{} expects handle produced by matching *_new builtin\", builtin_name)) } }\n\n");
     out.push_str("fn ensure_gpio_handle(handle: &str) -> Result<(), String> { if handle.starts_with(\"gpio:[\") && handle.contains(\"]:owned\") { Ok(()) } else { Err(\"gpio builtin expects handle from gpio_claim\".to_string()) } }\n\n");
     out.push_str("fn stable_hash(input: &str) -> u64 { let mut hash = 1469598103934665603u64; for b in input.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(1099511628211u64); } hash }\n\n");
+    out.push_str("fn copy_path(src: &Path, dst: &Path) -> io::Result<()> { if src.is_dir() { fs::create_dir_all(dst)?; for entry in fs::read_dir(src)? { let entry = entry?; let entry_src = entry.path(); let entry_dst = dst.join(entry.file_name()); copy_path(&entry_src, &entry_dst)?; } Ok(()) } else { if let Some(parent) = dst.parent() { if !parent.as_os_str().is_empty() { fs::create_dir_all(parent)?; } } fs::copy(src, dst)?; Ok(()) } }\n\n");
+    out.push_str("fn delete_path(path: &Path) -> io::Result<()> { if path.is_dir() { fs::remove_dir_all(path) } else { fs::remove_file(path) } }\n\n");
 
     out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
     out.push_str("  let out = match name {\n");
@@ -331,7 +351,14 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"upper\" => Value::Str(builtin_str_arg(args, 0)?.to_uppercase()),\n");
     out.push_str("    \"lower\" => Value::Str(builtin_str_arg(args, 0)?.to_lowercase()),\n");
     out.push_str("    \"contains\" => Value::Bool(builtin_str_arg(args, 0)?.contains(builtin_str_arg(args, 1)?)),\n");
+    out.push_str("    \"starts_with\" => Value::Bool(builtin_str_arg(args, 0)?.starts_with(builtin_str_arg(args, 1)?)),\n");
+    out.push_str("    \"ends_with\" => Value::Bool(builtin_str_arg(args, 0)?.ends_with(builtin_str_arg(args, 1)?)),\n");
+    out.push_str("    \"index_of\" => { let source = builtin_str_arg(args, 0)?; let needle = builtin_str_arg(args, 1)?; Value::Int(source.find(needle).map_or(-1, |idx| idx as i64)) },\n");
+    out.push_str("    \"pad_left\" => { let source = builtin_str_arg(args, 0)?; let width = builtin_int_arg(args, 1)?; if width < 0 { return Err(\"pad_left expects non-negative width\".to_string()); } let pad = (width as usize).saturating_sub(source.chars().count()); Value::Str(format!(\"{}{}\", \" \".repeat(pad), source)) },\n");
+    out.push_str("    \"pad_right\" => { let source = builtin_str_arg(args, 0)?; let width = builtin_int_arg(args, 1)?; if width < 0 { return Err(\"pad_right expects non-negative width\".to_string()); } let pad = (width as usize).saturating_sub(source.chars().count()); Value::Str(format!(\"{}{}\", source, \" \".repeat(pad))) },\n");
+    out.push_str("    \"repeat_str\" => { let source = builtin_str_arg(args, 0)?; let n = builtin_int_arg(args, 1)?; if n < 0 { return Err(\"repeat_str expects non-negative repeat count\".to_string()); } Value::Str(source.repeat(n as usize)) },\n");
     out.push_str("    \"split\" => { let source = builtin_str_arg(args, 0)?; let delimiter = builtin_str_arg(args, 1)?; if delimiter.is_empty() { return Err(\"split expects non-empty delimiter\".to_string()); } Value::Str(source.split(delimiter).collect::<Vec<_>>().join(SEQ_SEPARATOR_STR)) },\n");
+    out.push_str("    \"split_lines\" => { let source = builtin_str_arg(args, 0)?; Value::Str(source.lines().collect::<Vec<_>>().join(SEQ_SEPARATOR_STR)) },\n");
     out.push_str("    \"join\" => { let sequence = builtin_str_arg(args, 0)?; let delimiter = builtin_str_arg(args, 1)?; Value::Str(sequence_items(sequence).join(delimiter)) },\n");
     out.push_str("    \"phase\" => { let a = to_logic(args.get(0).ok_or_else(|| \"missing argument\".to_string())?)?; let b = to_logic(args.get(1).ok_or_else(|| \"missing argument\".to_string())?)?; from_logic(logic_phase(a, b)) },\n");
     out.push_str("    \"collapse\" => { let v = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; Value::Bool(matches!(to_logic(v)?, Logic3::True)) },\n");
@@ -401,6 +428,19 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"script_basename\" => { let path = builtin_str_arg(args, 0)?; let name = Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(); Value::Str(name) },\n");
     out.push_str("    \"script_run\" => { let command = builtin_str_arg(args, 0)?; let status = shell_command(command).status().map_err(|e| format!(\"script_run failed for `{}`: {}\", command, e))?; Value::Int(status.code().unwrap_or(-1) as i64) },\n");
     out.push_str("    \"script_run_capture\" => { let command = builtin_str_arg(args, 0)?; let output = shell_command(command).output().map_err(|e| format!(\"script_run_capture failed for `{}`: {}\", command, e))?; let mut out_s = String::new(); out_s.push_str(&String::from_utf8_lossy(&output.stdout)); out_s.push_str(&String::from_utf8_lossy(&output.stderr)); while out_s.ends_with('\\n') || out_s.ends_with('\\r') { out_s.pop(); } Value::Str(out_s) },\n");
+    out.push_str("    \"script_run_capture_lines\" => { let command = builtin_str_arg(args, 0)?; let output = shell_command(command).output().map_err(|e| format!(\"script_run_capture_lines failed for `{}`: {}\", command, e))?; let mut out_s = String::new(); out_s.push_str(&String::from_utf8_lossy(&output.stdout)); out_s.push_str(&String::from_utf8_lossy(&output.stderr)); Value::Str(out_s.lines().collect::<Vec<_>>().join(SEQ_SEPARATOR_STR)) },\n");
+    out.push_str("    \"script_exists\" => { let path = builtin_str_arg(args, 0)?; Value::Bool(Path::new(path).exists()) },\n");
+    out.push_str("    \"script_mkdir\" => { let path = builtin_str_arg(args, 0)?; fs::create_dir(path).map_err(|e| format!(\"script_mkdir failed for `{}`: {}\", path, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"script_mkdir_all\" => { let path = builtin_str_arg(args, 0)?; fs::create_dir_all(path).map_err(|e| format!(\"script_mkdir_all failed for `{}`: {}\", path, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"script_list_dir\" => { let path = builtin_str_arg(args, 0)?; let mut entries = Vec::new(); let dir_iter = fs::read_dir(path).map_err(|e| format!(\"script_list_dir failed for `{}`: {}\", path, e))?; for entry in dir_iter { let entry = entry.map_err(|e| format!(\"script_list_dir entry error: {}\", e))?; entries.push(entry.file_name().to_string_lossy().to_string()); } entries.sort(); Value::Str(entries.join(SEQ_SEPARATOR_STR)) },\n");
+    out.push_str("    \"script_copy\" => { let src = builtin_str_arg(args, 0)?; let dst = builtin_str_arg(args, 1)?; copy_path(Path::new(src), Path::new(dst)).map_err(|e| format!(\"script_copy failed from `{}` to `{}`: {}\", src, dst, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"script_move\" => { let src = builtin_str_arg(args, 0)?; let dst = builtin_str_arg(args, 1)?; fs::rename(src, dst).map_err(|e| format!(\"script_move failed from `{}` to `{}`: {}\", src, dst, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"script_delete\" => { let path = builtin_str_arg(args, 0)?; let p = Path::new(path); if !p.exists() { Value::Bool(false) } else { delete_path(p).map_err(|e| format!(\"script_delete failed for `{}`: {}\", path, e))?; Value::Bool(true) } },\n");
+    out.push_str("    \"script_is_file\" => { let path = builtin_str_arg(args, 0)?; Value::Bool(Path::new(path).is_file()) },\n");
+    out.push_str("    \"script_is_dir\" => { let path = builtin_str_arg(args, 0)?; Value::Bool(Path::new(path).is_dir()) },\n");
+    out.push_str("    \"script_env_set\" => { let key = builtin_str_arg(args, 0)?; let value = builtin_str_arg(args, 1)?; unsafe { std::env::set_var(key, value); } Value::Bool(true) },\n");
+    out.push_str("    \"script_exit\" => { let code = builtin_int_arg(args, 0)?; if !(i32::MIN as i64..=i32::MAX as i64).contains(&code) { return Err(\"script_exit code out of i32 range\".to_string()); } std::process::exit(code as i32) },\n");
+    out.push_str("    \"script_pipe\" => { let left = builtin_str_arg(args, 0)?; let right = builtin_str_arg(args, 1)?; let command = format!(\"{} | {}\", left, right); let status = shell_command(&command).status().map_err(|e| format!(\"script_pipe failed for `{}`: {}\", command, e))?; Value::Int(status.code().unwrap_or(-1) as i64) },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");

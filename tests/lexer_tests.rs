@@ -92,6 +92,17 @@ fn lexes_typed_declarations_and_semicolons() {
 }
 
 #[test]
+fn lexes_unused_modifier_keyword() {
+    let src = "section .text:\n  fn main():\n    unused own temp = 1\n";
+    let mut lexer = Lexer::new(src);
+    let tokens = lexer.tokenize().expect("tokenization should succeed");
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+
+    assert!(kinds.contains(&TokenKind::KeywordUnused));
+    assert!(kinds.contains(&TokenKind::KeywordOwn));
+}
+
+#[test]
 fn lexes_cycle_contract_block_and_memory_operands() {
     let src = "section .text:\n  fn hardware_pulse():\n    own r1 = 0x01\n    own r2 = 0x00\n\n    contract:\n      cycles: 16\n      on_underflow: \"pad_nop\"\n      on_overflow: \"compile_error\"\n    execute:\n      mov [port_a], r1\n      add r1, r2\n      mov [port_a], r2\n";
 

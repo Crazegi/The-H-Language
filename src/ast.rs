@@ -36,8 +36,24 @@ pub struct CycleContract {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    OwnDecl { name: String, expr: Expr, span: Span },
-    RefDecl { name: String, target: String, span: Span },
+    ConstDecl {
+        name: String,
+        expr: Expr,
+        suppress_unused_warning: bool,
+        span: Span,
+    },
+    OwnDecl {
+        name: String,
+        expr: Expr,
+        suppress_unused_warning: bool,
+        span: Span,
+    },
+    RefDecl {
+        name: String,
+        target: String,
+        suppress_unused_warning: bool,
+        span: Span,
+    },
     PortOwn { port: String, span: Span },
     PortRef { port: String, span: Span },
     YieldPort {
@@ -133,7 +149,8 @@ pub enum Expr {
 impl Stmt {
     pub fn span(&self) -> Span {
         match self {
-            Stmt::OwnDecl { span, .. }
+            Stmt::ConstDecl { span, .. }
+            | Stmt::OwnDecl { span, .. }
             | Stmt::RefDecl { span, .. }
             | Stmt::PortOwn { span, .. }
             | Stmt::PortRef { span, .. }

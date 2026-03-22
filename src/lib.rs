@@ -26,11 +26,12 @@ pub use evaluator::{run_program, RuntimeError, Value};
 pub use lexer::Lexer;
 pub use native::{
 	compile_h_to_native_artifacts, compile_h_to_native_artifacts_with_options,
+	compile_h_file_to_native_artifacts_with_options,
 	compile_h_to_native_binary, compile_h_to_native_binary_with_options, NativeBuildArtifacts,
 	NativeCompileError,
 };
 pub use package::{read_package, write_package, PackageError};
-pub use parser::{parse_source, ParseError, Parser};
+pub use parser::{parse_source, parse_source_from_path, ParseError, Parser};
 pub use semantic::{analyze, analyze_with_warnings, SemanticError, SemanticWarning};
 pub use token::{Span, Token, TokenKind};
 pub use vm::{run_bytecode, VmError};

@@ -337,6 +337,8 @@ impl Lexer {
             "int" => TokenKind::KeywordInt,
             "string" => TokenKind::KeywordString,
             "bool" => TokenKind::KeywordBool,
+            "const" => TokenKind::KeywordConst,
+            "unused" => TokenKind::KeywordUnused,
             _ if is_register(&s) => TokenKind::Register,
             _ if MNEMONICS.contains(&lower.as_str()) => TokenKind::Mnemonic,
             _ => TokenKind::Identifier,

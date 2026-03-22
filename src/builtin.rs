@@ -44,7 +44,14 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "upper" => Some(1),
         "lower" => Some(1),
         "contains" => Some(2),
+        "starts_with" => Some(2),
+        "ends_with" => Some(2),
+        "index_of" => Some(2),
+        "pad_left" => Some(2),
+        "pad_right" => Some(2),
+        "repeat_str" => Some(2),
         "split" => Some(2),
+        "split_lines" => Some(1),
         "join" => Some(2),
         "phase" => Some(2),
         "collapse" => Some(1),
@@ -114,6 +121,19 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "script_basename" => Some(1),
         "script_run" => Some(1),
         "script_run_capture" => Some(1),
+        "script_run_capture_lines" => Some(1),
+        "script_exists" => Some(1),
+        "script_mkdir" => Some(1),
+        "script_mkdir_all" => Some(1),
+        "script_list_dir" => Some(1),
+        "script_copy" => Some(2),
+        "script_move" => Some(2),
+        "script_delete" => Some(1),
+        "script_is_file" => Some(1),
+        "script_is_dir" => Some(1),
+        "script_env_set" => Some(2),
+        "script_exit" => Some(1),
+        "script_pipe" => Some(2),
         _ => None,
     }
 }
@@ -342,6 +362,39 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
         "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
         "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
         "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
+        "starts_with" => Value::Bool(str_arg(args, 0)?.starts_with(str_arg(args, 1)?)),
+        "ends_with" => Value::Bool(str_arg(args, 0)?.ends_with(str_arg(args, 1)?)),
+        "index_of" => {
+            let source = str_arg(args, 0)?;
+            let needle = str_arg(args, 1)?;
+            Value::Int(source.find(needle).map_or(-1, |idx| idx as i64))
+        }
+        "pad_left" => {
+            let source = str_arg(args, 0)?;
+            let width = int_arg(args, 1)?;
+            if width < 0 {
+                return Err("pad_left expects non-negative width".to_string());
+            }
+            let pad = (width as usize).saturating_sub(source.chars().count());
+            Value::Str(format!("{}{}", " ".repeat(pad), source))
+        }
+        "pad_right" => {
+            let source = str_arg(args, 0)?;
+            let width = int_arg(args, 1)?;
+            if width < 0 {
+                return Err("pad_right expects non-negative width".to_string());
+            }
+            let pad = (width as usize).saturating_sub(source.chars().count());
+            Value::Str(format!("{}{}", source, " ".repeat(pad)))
+        }
+        "repeat_str" => {
+            let source = str_arg(args, 0)?;
+            let n = int_arg(args, 1)?;
+            if n < 0 {
+                return Err("repeat_str expects non-negative repeat count".to_string());
+            }
+            Value::Str(source.repeat(n as usize))
+        }
         "split" => {
             let source = str_arg(args, 0)?;
             let delimiter = str_arg(args, 1)?;
@@ -354,6 +407,10 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
                     .collect::<Vec<_>>()
                     .join(SEQ_SEPARATOR_STR),
             )
+        }
+        "split_lines" => {
+            let source = str_arg(args, 0)?;
+            Value::Str(source.lines().collect::<Vec<_>>().join(SEQ_SEPARATOR_STR))
         }
         "join" => {
             let sequence = str_arg(args, 0)?;
@@ -923,6 +980,103 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             }
             Value::Str(out)
         }
+        "script_run_capture_lines" => {
+            let command = str_arg(args, 0)?;
+            let output = shell_command(command).output().map_err(|e| {
+                format!("script_run_capture_lines failed for `{}`: {}", command, e)
+            })?;
+
+            let mut out = String::new();
+            out.push_str(&String::from_utf8_lossy(&output.stdout));
+            out.push_str(&String::from_utf8_lossy(&output.stderr));
+
+            Value::Str(out.lines().collect::<Vec<_>>().join(SEQ_SEPARATOR_STR))
+        }
+        "script_exists" => {
+            let path = str_arg(args, 0)?;
+            Value::Bool(Path::new(path).exists())
+        }
+        "script_mkdir" => {
+            let path = str_arg(args, 0)?;
+            fs::create_dir(path)
+                .map_err(|e| format!("script_mkdir failed for `{}`: {}", path, e))?;
+            Value::Bool(true)
+        }
+        "script_mkdir_all" => {
+            let path = str_arg(args, 0)?;
+            fs::create_dir_all(path)
+                .map_err(|e| format!("script_mkdir_all failed for `{}`: {}", path, e))?;
+            Value::Bool(true)
+        }
+        "script_list_dir" => {
+            let path = str_arg(args, 0)?;
+            let mut entries = Vec::new();
+            let dir_iter = fs::read_dir(path)
+                .map_err(|e| format!("script_list_dir failed for `{}`: {}", path, e))?;
+            for entry in dir_iter {
+                let entry = entry.map_err(|e| format!("script_list_dir entry error: {}", e))?;
+                entries.push(entry.file_name().to_string_lossy().to_string());
+            }
+            entries.sort();
+            Value::Str(entries.join(SEQ_SEPARATOR_STR))
+        }
+        "script_copy" => {
+            let src = str_arg(args, 0)?;
+            let dst = str_arg(args, 1)?;
+            copy_path(Path::new(src), Path::new(dst))
+                .map_err(|e| format!("script_copy failed from `{}` to `{}`: {}", src, dst, e))?;
+            Value::Bool(true)
+        }
+        "script_move" => {
+            let src = str_arg(args, 0)?;
+            let dst = str_arg(args, 1)?;
+            fs::rename(src, dst)
+                .map_err(|e| format!("script_move failed from `{}` to `{}`: {}", src, dst, e))?;
+            Value::Bool(true)
+        }
+        "script_delete" => {
+            let path = str_arg(args, 0)?;
+            let p = Path::new(path);
+            if !p.exists() {
+                Value::Bool(false)
+            } else {
+                delete_path(p)
+                    .map_err(|e| format!("script_delete failed for `{}`: {}", path, e))?;
+                Value::Bool(true)
+            }
+        }
+        "script_is_file" => {
+            let path = str_arg(args, 0)?;
+            Value::Bool(Path::new(path).is_file())
+        }
+        "script_is_dir" => {
+            let path = str_arg(args, 0)?;
+            Value::Bool(Path::new(path).is_dir())
+        }
+        "script_env_set" => {
+            let key = str_arg(args, 0)?;
+            let value = str_arg(args, 1)?;
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Value::Bool(true)
+        }
+        "script_exit" => {
+            let code = int_arg(args, 0)?;
+            if !(i32::MIN as i64..=i32::MAX as i64).contains(&code) {
+                return Err("script_exit code out of i32 range".to_string());
+            }
+            std::process::exit(code as i32)
+        }
+        "script_pipe" => {
+            let left = str_arg(args, 0)?;
+            let right = str_arg(args, 1)?;
+            let command = format!("{} | {}", left, right);
+            let status = shell_command(&command)
+                .status()
+                .map_err(|e| format!("script_pipe failed for `{}`: {}", command, e))?;
+            Value::Int(status.code().unwrap_or(-1) as i64)
+        }
         _ => return Ok(None),
     };
 
@@ -967,7 +1121,14 @@ fn namespaced_to_builtin(name: &str) -> Option<&'static str> {
         ("string", "upper") => Some("upper"),
         ("string", "lower") => Some("lower"),
         ("string", "contains") => Some("contains"),
+        ("string", "starts_with") => Some("starts_with"),
+        ("string", "ends_with") => Some("ends_with"),
+        ("string", "index_of") => Some("index_of"),
+        ("string", "pad_left") => Some("pad_left"),
+        ("string", "pad_right") => Some("pad_right"),
+        ("string", "repeat_str") => Some("repeat_str"),
         ("string", "split") => Some("split"),
+        ("string", "split_lines") => Some("split_lines"),
         ("string", "join") => Some("join"),
         ("string", "trim") => Some("trim"),
         ("string", "replace") => Some("replace"),
@@ -1035,6 +1196,19 @@ fn namespaced_to_builtin(name: &str) -> Option<&'static str> {
         ("script", "basename") => Some("script_basename"),
         ("script", "run") => Some("script_run"),
         ("script", "run_capture") => Some("script_run_capture"),
+        ("script", "run_capture_lines") => Some("script_run_capture_lines"),
+        ("script", "exists") => Some("script_exists"),
+        ("script", "mkdir") => Some("script_mkdir"),
+        ("script", "mkdir_all") => Some("script_mkdir_all"),
+        ("script", "list_dir") => Some("script_list_dir"),
+        ("script", "copy") => Some("script_copy"),
+        ("script", "move") => Some("script_move"),
+        ("script", "delete") => Some("script_delete"),
+        ("script", "is_file") => Some("script_is_file"),
+        ("script", "is_dir") => Some("script_is_dir"),
+        ("script", "env_set") => Some("script_env_set"),
+        ("script", "exit") => Some("script_exit"),
+        ("script", "pipe") => Some("script_pipe"),
         _ => None,
     }
 }
@@ -1278,6 +1452,35 @@ fn stable_hash(input: &str) -> u64 {
         hash = hash.wrapping_mul(1099511628211u64);
     }
     hash
+}
+
+fn copy_path(src: &Path, dst: &Path) -> io::Result<()> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let entry_src = entry.path();
+            let entry_dst = dst.join(entry.file_name());
+            copy_path(&entry_src, &entry_dst)?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = dst.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::copy(src, dst)?;
+        Ok(())
+    }
+}
+
+fn delete_path(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 fn escape_json_string(input: &str) -> String {

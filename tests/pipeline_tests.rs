@@ -1,4 +1,4 @@
-use hl_lexer::{analyze, analyze_with_warnings, parse_source, run_program};
+use hl_lexer::{analyze, analyze_with_warnings, parse_source, parse_source_from_path, run_program};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unique_temp_path(file_name: &str) -> std::path::PathBuf {
@@ -52,7 +52,34 @@ section .text:
 
     let program = parse_source(src).expect("parse should pass");
     let err = analyze(&program).expect_err("assigning to ref should fail");
-    assert!(err.message.contains("Cannot assign to reference binding"));
+    assert!(err.message.contains("Cannot assign to immutable binding"));
+}
+
+#[test]
+fn semantic_rejects_assign_to_const() {
+    let src = r#"section .text:
+  fn main():
+    const LIMIT = 5
+    LIMIT = 7
+    return LIMIT
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("assigning to const should fail");
+    assert!(err.message.contains("immutable binding"));
+}
+
+#[test]
+fn semantic_rejects_non_literal_const_expression() {
+    let src = r#"section .text:
+  fn main():
+    const LIMIT = 1 + 2
+    return LIMIT
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("non-literal const should fail");
+    assert!(err.message.contains("literal values"));
 }
 
 #[test]
@@ -159,6 +186,24 @@ fn parses_and_runs_format_builtin() {
     own status = "HIGH"
     own msg = format("sensor={} reading={} status={}", name, reading, status)
     if msg == "sensor=port_a reading=42 status=HIGH":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn parses_and_runs_const_declaration() {
+    let src = r#"section .text:
+  fn main():
+    const SENSOR_ID = "port_a"
+    const LIMIT = 10
+    own msg = format("{}:{}", SENSOR_ID, LIMIT)
+    if msg == "port_a:10":
       return 1
     return 0
 "#;
@@ -333,6 +378,74 @@ fn parses_and_runs_imported_namespaced_builtins() {
 }
 
 #[test]
+fn parses_and_runs_multifile_hl_import() {
+    let root = unique_temp_path("multifile_import");
+    std::fs::create_dir_all(&root).expect("should create import fixture dir");
+
+    let main_path = root.join("main.hl");
+    let helper_path = root.join("helper.hl");
+
+    std::fs::write(
+      &helper_path,
+      r#"section .text:
+  fn helper_value():
+    return 7
+"#,
+    )
+    .expect("should write helper module");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./helper.hl"
+
+  fn main():
+    return helper_value()
+"#,
+    )
+    .expect("should write main module");
+
+    let program = parse_source_from_path(&main_path).expect("path-aware parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "7");
+}
+
+#[test]
+fn parse_rejects_multifile_import_cycles() {
+    let root = unique_temp_path("multifile_cycle");
+    std::fs::create_dir_all(&root).expect("should create cycle fixture dir");
+
+    let a_path = root.join("a.hl");
+    let b_path = root.join("b.hl");
+
+    std::fs::write(
+      &a_path,
+      r#"section .text:
+  import "./b.hl"
+
+  fn main():
+    return 1
+"#,
+    )
+    .expect("should write module a");
+
+    std::fs::write(
+      &b_path,
+      r#"section .text:
+  import "./a.hl"
+
+  fn helper():
+    return 2
+"#,
+    )
+    .expect("should write module b");
+
+    let err = parse_source_from_path(&a_path).expect_err("import cycle should fail parse");
+    assert!(err.message.contains("Import cycle detected"));
+}
+
+#[test]
 fn semantic_rejects_namespaced_builtin_without_import() {
     let src = r#"section .text:
   fn main():
@@ -396,6 +509,37 @@ fn semantic_warnings_report_unused_symbols_and_ports_with_locations() {
         .iter()
         .any(|w| w.message.contains("Hardware port `port_a` is owned but never written to") && w.line == 4));
     assert!(warnings.iter().all(|w| w.to_string().contains("warning:")));
+}
+
+#[test]
+fn semantic_allows_declaration_level_unused_suppression() {
+    let src = r#"section .text:
+  fn main():
+    unused own intentionally_unused = 42
+    own still_warns = 7
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let warnings = analyze_with_warnings(&program).expect("semantic analysis should pass");
+
+    assert!(!warnings
+        .iter()
+        .any(|w| w.message.contains("Variable `intentionally_unused` declared but never used")));
+    assert!(warnings
+        .iter()
+        .any(|w| w.message.contains("Variable `still_warns` declared but never used")));
+}
+
+#[test]
+fn parse_rejects_unused_modifier_on_non_declaration() {
+    let src = r#"section .text:
+  fn main():
+    unused return 0
+"#;
+
+    let err = parse_source(src).expect_err("unused modifier on return should fail parse");
+    assert!(err.message.contains("can only be applied to variable declarations"));
 }
 
 #[test]
@@ -653,6 +797,69 @@ fn parses_and_runs_scripting_library_builtins() {
     return 0
 "#,
         script_dir_h, script_dir_h, script_dir_h
+    );
+
+    let program = parse_source(&src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn parses_and_runs_extended_scripting_and_string_builtins() {
+    let root = unique_temp_path("script_ext_pipeline");
+    let root_h = root.to_string_lossy().replace('\\', "/");
+
+    let src = format!(
+        r#"section .text:
+  fn main():
+    own root = "{}"
+    own made_root = script_mkdir_all(root)
+    own sub_dir = script_path_join(root, "sub")
+    own made_sub = script_mkdir(sub_dir)
+    own file = script_path_join(sub_dir, "data.txt")
+    own wrote = write_text(file, "alpha\nbeta\n")
+
+    own static_lines = split_lines("first\nsecond")
+    own line_count = 0
+    for line in static_lines:
+      if len(trim(line)) > 0:
+        add line_count, 1
+
+    own captured = script_run_capture("echo line1")
+    own captured_lines = script_run_capture_lines("echo line1")
+
+    own starts = starts_with("foobar", "foo")
+    own ends = ends_with("foobar", "bar")
+    own left = pad_left("x", 3)
+    own right = pad_right("x", 3)
+    own rep = repeat_str("ab", 3)
+    own idx = index_of("abcdef", "cd")
+
+    own listed = script_list_dir(sub_dir)
+    own listed_ok = contains(listed, "data.txt")
+
+    own copied_path = script_path_join(sub_dir, "copy.txt")
+    own copied = script_copy(file, copied_path)
+    own moved_path = script_path_join(sub_dir, "moved.txt")
+    own moved = script_move(copied_path, moved_path)
+
+    own is_file_ok = script_is_file(moved_path)
+    own is_dir_ok = script_is_dir(sub_dir)
+    own exists_ok = script_exists(moved_path)
+
+    own env_ok = script_env_set("H_TEST_SCRIPT_EXT", "ok")
+    own env_val = env("H_TEST_SCRIPT_EXT")
+
+    own pipe_code = script_pipe("echo piped", "sort")
+    own removed = script_delete(root)
+    own exists_after = script_exists(root)
+
+    if made_root and made_sub and wrote and line_count == 2 and contains(captured, "line1") and iter_len(captured_lines) >= 1 and array_get(captured_lines, 0) == "line1" and starts and ends and left == "  x" and right == "x  " and rep == "ababab" and idx == 2 and listed_ok and copied and moved and is_file_ok and is_dir_ok and exists_ok and env_ok and env_val == "ok" and pipe_code == 0 and removed and (not exists_after):
+      return 1
+    return 0
+"#,
+        root_h
     );
 
     let program = parse_source(&src).expect("parse should pass");

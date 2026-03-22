@@ -915,7 +915,9 @@ fn collect_execute_required_cycle_keys(
             keys.insert(key.to_string());
             keys.insert(format!("energy.{}", key));
         }
-        Stmt::OwnDecl { expr, .. } | Stmt::Assign { expr, .. } => {
+        Stmt::ConstDecl { expr, .. }
+        | Stmt::OwnDecl { expr, .. }
+        | Stmt::Assign { expr, .. } => {
             collect_expr_cycle_keys(expr, keys);
             keys.insert("stmt.store".to_string());
             keys.insert("energy.stmt.store".to_string());
@@ -1016,6 +1018,10 @@ impl FunctionCompiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         match stmt {
+            Stmt::ConstDecl { name, expr, .. } => {
+                self.compile_expr(expr)?;
+                self.code.push(Instruction::DefineVar(name.clone()));
+            }
             Stmt::OwnDecl { name, expr, .. } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::DefineVar(name.clone()));
@@ -1497,6 +1503,35 @@ impl FunctionCompiler {
                 cycles: 0,
                 energy_nj: 0,
             }),
+            Stmt::ConstDecl { name, expr, .. } => {
+                self.compile_stmt(stmt)?;
+                let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
+                cycles = cycles
+                    .checked_add(cycle_cost(&self.active_cycle_profile, "stmt.store")?)
+                    .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+
+                let mut energy_nj = if track_energy {
+                    expr_energy_cost(expr, &self.active_cycle_profile)?
+                } else {
+                    0
+                };
+                if track_energy {
+                    energy_nj = energy_nj
+                        .checked_add(cycle_cost(&self.active_cycle_profile, "energy.stmt.store")?)
+                        .ok_or_else(|| {
+                            CompileError::new("Energy count overflow in execute block")
+                        })?;
+                }
+
+                if let Some(value) =
+                    eval_execute_const_expr(expr, const_env, self.options.fast_math)?
+                {
+                    const_env.insert(name.clone(), value);
+                } else {
+                    const_env.remove(name);
+                }
+                Ok(ExecuteCost { cycles, energy_nj })
+            }
             Stmt::OwnDecl { name, expr, .. } => {
                 self.compile_stmt(stmt)?;
                 let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;

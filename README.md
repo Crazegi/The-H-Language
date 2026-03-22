@@ -44,6 +44,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Interrupt handlers: `interrupt fn handler():`
 - Yield windows for interrupt grants: `yield [port_a] to handler:`
 - Typed declarations in block syntax: `int`, `string`, `bool`
+- Declaration-level unused suppression: `unused own temp = 42` (also works with `const`, typed, and `ref` declarations)
 - Assembly instructions: `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
 - Memory-mapped destination style: `mov [port_a], r1`
 - Expressions: arithmetic, comparison, bitwise (`&`, `|`, `<<`, `>>`), call expressions
@@ -55,7 +56,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - integer math: `gcd`, `lcm`, `is_prime`, `next_pow2`
   - bit math: `popcount`, `leading_zeros`, `trailing_zeros`, `bit_reverse`
   - collections (string-encoded): `array_new`, `array_len`, `array_push`, `array_get`, `queue_new`, `queue_len`, `queue_push`, `queue_peek`, `queue_pop`, `ring_new`, `ring_len`, `ring_push`, `ring_peek`
-  - string: `len`, `upper`, `lower`, `contains`, `split`, `join`, `format`
+  - string: `len`, `upper`, `lower`, `contains`, `starts_with`, `ends_with`, `index_of`, `pad_left`, `pad_right`, `repeat_str`, `split`, `split_lines`, `join`, `format`
   - logic: `phase`, `collapse`
   - hardware: `sleep_until(interrupt)`
   - embedded/hardware scaffold:
@@ -75,7 +76,9 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - scripting library:
     - process args: `script_args_count`, `script_arg`
     - working directory/path: `script_cwd`, `script_chdir`, `script_path_join`, `script_dirname`, `script_basename`
-    - shell integration: `script_run`, `script_run_capture`
+    - shell integration: `script_run`, `script_run_capture`, `script_run_capture_lines`, `script_pipe`
+    - filesystem ops: `script_exists`, `script_mkdir`, `script_mkdir_all`, `script_list_dir`, `script_copy`, `script_move`, `script_delete`, `script_is_file`, `script_is_dir`
+    - process/env control: `script_env_set`, `script_exit`
   - namespaced call style is supported with imports, e.g. `math.atan2(y, x)`, `gpio.claim("[port_a]")`
 - Control flow: `if/else`, `while`, `repeat`, `for`, `return`
 - Structured output: YAML-style `print:` blocks
@@ -125,6 +128,25 @@ This gives you a safe migration path:
 
 If you use namespaced style without importing the module, semantic analysis fails early with a
 clear error.
+
+### Multi-file .hl Imports
+
+H also supports importing local source files from inside `section .text:`:
+
+```text
+section .text:
+  import "./helper.hl"
+
+  fn main():
+    return helper_value()
+```
+
+Rules:
+- File imports are resolved relative to the importing file.
+- Recursive imports are supported.
+- Import cycles are rejected with a parse-time error.
+- Duplicate function names across imported files are rejected.
+- Stdlib module imports (e.g. `import math`) continue to work the same way.
 
 ### Module Alias Map (Practical Examples)
 
@@ -233,6 +255,20 @@ Core capabilities:
 - Command execution:
   - `script_run(command)` returns exit code
   - `script_run_capture(command)` returns captured stdout/stderr text
+  - `script_run_capture_lines(command)` returns captured stdout/stderr split into iterable lines
+  - `script_pipe(left_command, right_command)` executes a shell pipe and returns exit code
+- Filesystem automation:
+  - `script_exists(path)`
+  - `script_mkdir(path)`
+  - `script_mkdir_all(path)`
+  - `script_list_dir(path)` returns iterable entry names
+  - `script_copy(src, dst)`
+  - `script_move(src, dst)`
+  - `script_delete(path)` removes file or directory recursively
+  - `script_is_file(path)` / `script_is_dir(path)`
+- Process/environment control:
+  - `script_env_set(key, value)`
+  - `script_exit(code)`
 
 Example:
 

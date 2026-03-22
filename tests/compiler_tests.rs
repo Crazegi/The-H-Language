@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hl_lexer::{
   analyze, compile_program, compile_program_with_options, load_cycle_profiles_from_file,
-  diagnose_cycle_profile_coverage, parse_source,
+  diagnose_cycle_profile_coverage, parse_source, parse_source_from_path,
   render_contract_report_text, run_bytecode, CompileOptions, CycleProfile, Instruction,
   OptimizationLevel, UnknownCycleCostPolicy,
 };
@@ -147,6 +147,60 @@ fn vm_executes_format_builtin() {
 }
 
 #[test]
+fn vm_executes_multifile_hl_imports() {
+    let root = unique_profile_path("vm_multifile_import");
+    std::fs::create_dir_all(&root).expect("should create import fixture dir");
+
+    let main_path = root.join("main.hl");
+    let helper_path = root.join("helper.hl");
+
+    std::fs::write(
+      &helper_path,
+      r#"section .text:
+  fn helper_value():
+    return 11
+"#,
+    )
+    .expect("should write helper module");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./helper.hl"
+
+  fn main():
+    return helper_value()
+"#,
+    )
+    .expect("should write main module");
+
+    let program = parse_source_from_path(&main_path).expect("path-aware parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "11");
+}
+
+#[test]
+fn vm_executes_const_declarations() {
+    let src = r#"section .text:
+  fn main():
+    const SENSOR = "port_c"
+    const LIMIT = 3
+    own msg = format("{}:{}", SENSOR, LIMIT)
+    if msg == "port_c:3":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn vm_executes_bitwise_and_sleep_until_builtin() {
     let src = r#"section .text:
   fn main():
@@ -246,6 +300,70 @@ fn vm_executes_scripting_library_builtins() {
     return 0
 "#,
         script_dir_h, script_dir_h, script_dir_h
+    );
+
+    let program = parse_source(&src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn vm_executes_extended_scripting_and_string_builtins() {
+    let root = unique_profile_path("script_ext_vm");
+    let root_h = root.to_string_lossy().replace('\\', "/");
+
+    let src = format!(
+        r#"section .text:
+  fn main():
+    own root = "{}"
+    own made_root = script_mkdir_all(root)
+    own sub_dir = script_path_join(root, "sub")
+    own made_sub = script_mkdir(sub_dir)
+    own file = script_path_join(sub_dir, "data.txt")
+    own wrote = write_text(file, "alpha\nbeta\n")
+
+    own static_lines = split_lines("first\nsecond")
+    own line_count = 0
+    for line in static_lines:
+      if len(trim(line)) > 0:
+        add line_count, 1
+
+    own captured = script_run_capture("echo line1")
+    own captured_lines = script_run_capture_lines("echo line1")
+
+    own starts = starts_with("foobar", "foo")
+    own ends = ends_with("foobar", "bar")
+    own left = pad_left("x", 3)
+    own right = pad_right("x", 3)
+    own rep = repeat_str("ab", 3)
+    own idx = index_of("abcdef", "cd")
+
+    own listed = script_list_dir(sub_dir)
+    own listed_ok = contains(listed, "data.txt")
+
+    own copied_path = script_path_join(sub_dir, "copy.txt")
+    own copied = script_copy(file, copied_path)
+    own moved_path = script_path_join(sub_dir, "moved.txt")
+    own moved = script_move(copied_path, moved_path)
+
+    own is_file_ok = script_is_file(moved_path)
+    own is_dir_ok = script_is_dir(sub_dir)
+    own exists_ok = script_exists(moved_path)
+
+    own env_ok = script_env_set("H_TEST_SCRIPT_EXT", "ok")
+    own env_val = env("H_TEST_SCRIPT_EXT")
+
+    own pipe_code = script_pipe("echo piped", "sort")
+    own removed = script_delete(root)
+    own exists_after = script_exists(root)
+
+    if made_root and made_sub and wrote and line_count == 2 and contains(captured, "line1") and iter_len(captured_lines) >= 1 and array_get(captured_lines, 0) == "line1" and starts and ends and left == "  x" and right == "x  " and rep == "ababab" and idx == 2 and listed_ok and copied and moved and is_file_ok and is_dir_ok and exists_ok and env_ok and env_val == "ok" and pipe_code == 0 and removed and (not exists_after):
+      return 1
+    return 0
+"#,
+        root_h
     );
 
     let program = parse_source(&src).expect("parse should pass");
