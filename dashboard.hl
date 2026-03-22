@@ -1,0 +1,21 @@
+section .text:
+  fn main():
+    own timestamp_ms = now_ms()
+
+    own api_url = "https://dummyjson.com/test"
+    own api_payload = http_get(api_url)
+    own api_status = json_parse(api_payload, "status")
+
+    own loc_command = "powershell -NoProfile -Command '$sum=0; Get-ChildItem -Filter *.hl | ForEach-Object { $sum += (Get-Content $_.FullName | Measure-Object -Line).Lines }; $sum'"
+    own loc_raw = script_run_capture(loc_command)
+    own loc_total = to_int(trim(loc_raw))
+
+    print:
+      app: "dashboard"
+      timestamp_ms: timestamp_ms
+      api_url: api_url
+      api_status: api_status
+      loc_total: loc_total
+      loc_command: loc_command
+
+    return 0
