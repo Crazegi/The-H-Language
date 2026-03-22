@@ -87,7 +87,11 @@ impl FunctionCompiler {
             Stmt::Instruction { op, target, rhs } => match op {
                 AstInstruction::Mov => {
                     self.compile_expr(rhs)?;
-                    self.code.push(Instruction::StoreVar(target.clone()));
+                    if is_memory_target(target) {
+                        self.code.push(Instruction::StoreOrDefine(target.clone()));
+                    } else {
+                        self.code.push(Instruction::StoreVar(target.clone()));
+                    }
                 }
                 AstInstruction::Add => {
                     self.code.push(Instruction::LoadVar(target.clone()));
@@ -194,6 +198,11 @@ impl FunctionCompiler {
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
             }
+            Stmt::CycleContract { body, .. } => {
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
+            }
             Stmt::PrintBlock(fields) => {
                 self.code.push(Instruction::PrintBegin);
                 for (key, expr) in fields {
@@ -294,4 +303,8 @@ fn const_expr_to_value(expr: &Expr) -> Result<Value, CompileError> {
             "Data section supports only literal constants in compiled mode",
         )),
     }
+}
+
+fn is_memory_target(target: &str) -> bool {
+    target.starts_with('[') && target.ends_with(']') && target.len() > 2
 }

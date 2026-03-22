@@ -98,13 +98,13 @@ fn analyze_stmt(
             analyze_expr(expr, symbols, data, signatures)?;
         }
         Stmt::Instruction { target, rhs, .. } => {
-            if !symbols.contains(target) {
+            if !is_memory_target(target) && !symbols.contains(target) {
                 return Err(SemanticError::new(format!(
                     "Instruction target `{}` is undeclared",
                     target
                 )));
             }
-            if refs.contains(target) {
+            if !is_memory_target(target) && refs.contains(target) {
                 return Err(SemanticError::new(format!(
                     "Instruction target `{}` cannot be a reference",
                     target
@@ -133,6 +133,14 @@ fn analyze_stmt(
         }
         Stmt::Repeat { times, body } => {
             analyze_expr(times, symbols, data, signatures)?;
+            for s in body {
+                analyze_stmt(s, symbols, refs, data, signatures)?;
+            }
+        }
+        Stmt::CycleContract { spec, body } => {
+            if spec.cycles == 0 {
+                return Err(SemanticError::new("Cycle contract `cycles` must be > 0"));
+            }
             for s in body {
                 analyze_stmt(s, symbols, refs, data, signatures)?;
             }
@@ -225,4 +233,8 @@ fn builtin_arity(name: &str) -> Option<usize> {
         "collapse" => Some(1),
         _ => None,
     }
+}
+
+fn is_memory_target(target: &str) -> bool {
+    target.starts_with('[') && target.ends_with(']') && target.len() > 2
 }

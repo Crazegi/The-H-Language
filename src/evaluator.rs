@@ -186,6 +186,14 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
+            Stmt::CycleContract { body, .. } => {
+                for stmt in body {
+                    if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
+                        return Ok(Flow::Return(v));
+                    }
+                }
+                Ok(Flow::Continue)
+            }
             Stmt::PrintBlock(fields) => {
                 println!("print:");
                 for (key, expr) in fields {
@@ -303,6 +311,9 @@ impl Runtime {
         if frame.vars.contains_key(&target) {
             frame.vars.insert(target, value);
             Ok(())
+        } else if is_memory_target(&target) {
+            frame.vars.insert(target, value);
+            Ok(())
         } else {
             Err(RuntimeError::new(format!("Unknown local symbol `{}`", name)))
         }
@@ -318,6 +329,10 @@ impl Runtime {
 
         if let Some(v) = self.globals.get(name) {
             return Ok(v.clone());
+        }
+
+        if is_memory_target(name) {
+            return Ok(Value::Int(0));
         }
 
         Err(RuntimeError::new(format!("Unknown symbol `{}`", name)))
@@ -569,4 +584,8 @@ impl Value {
 pub fn run_program(program: &Program) -> Result<Value, RuntimeError> {
     let runtime = Runtime::new(program)?;
     runtime.run()
+}
+
+fn is_memory_target(target: &str) -> bool {
+    target.starts_with('[') && target.ends_with(']') && target.len() > 2
 }

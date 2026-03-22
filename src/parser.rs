@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::ast::{BinaryOp, Expr, Function, Instruction, Program, Stmt, UnaryOp};
+use crate::ast::{
+    BinaryOp, ContractPolicy, CycleContract, Expr, Function, Instruction, Program, Stmt, UnaryOp,
+};
 use crate::error::LexerError;
 use crate::lexer::Lexer;
 use crate::token::{Token, TokenKind};
@@ -182,6 +184,17 @@ impl Parser {
             return Ok(Stmt::Repeat { times, body });
         }
 
+        if self.match_kind(TokenKind::KeywordContract) {
+            let spec = self.parse_cycle_contract_spec()?;
+            self.skip_newlines();
+            self.expect(
+                TokenKind::KeywordExecute,
+                "Expected `execute` block after `contract`",
+            )?;
+            let body = self.parse_block("contract execute body")?;
+            return Ok(Stmt::CycleContract { spec, body });
+        }
+
         if self.match_kind(TokenKind::KeywordPrint) {
             self.expect(TokenKind::Colon, "Expected `:` after `print`")?;
             self.expect(TokenKind::Newline, "Expected newline after `print:`")?;
@@ -232,7 +245,7 @@ impl Parser {
                     ));
                 }
             };
-            let target = self.expect_identifier_like("Expected instruction target")?.lexeme;
+            let target = self.parse_instruction_target()?;
             self.expect(TokenKind::Comma, "Expected `,` after instruction target")?;
             let rhs = self.parse_expression()?;
             self.consume_stmt_terminator();
@@ -478,10 +491,8 @@ impl Parser {
         let tok = self.advance().clone();
         match tok.kind {
             TokenKind::Number => {
-                let value = tok
-                    .lexeme
-                    .parse::<i64>()
-                    .map_err(|_| ParseError::new(&tok, "Invalid integer literal"))?;
+                let value = parse_int_literal(&tok.lexeme)
+                    .ok_or_else(|| ParseError::new(&tok, "Invalid integer literal"))?;
                 Ok(Expr::Number(value))
             }
             TokenKind::String => Ok(Expr::String(tok.lexeme)),
@@ -519,6 +530,115 @@ impl Parser {
             Ok(self.advance().clone())
         } else {
             Err(ParseError::new(self.peek(), message))
+        }
+    }
+
+    fn parse_instruction_target(&mut self) -> Result<String, ParseError> {
+        if self.match_kind(TokenKind::LBracket) {
+            let name = self
+                .expect_identifier_like("Expected memory target name inside `[` `]`")?
+                .lexeme;
+            self.expect(TokenKind::RBracket, "Expected `]` after memory target")?;
+            return Ok(format!("[{}]", name));
+        }
+
+        Ok(self
+            .expect_identifier_like("Expected instruction target")?
+            .lexeme)
+    }
+
+    fn parse_cycle_contract_spec(&mut self) -> Result<CycleContract, ParseError> {
+        self.expect(TokenKind::Colon, "Expected `:` after `contract`")?;
+        self.expect(TokenKind::Newline, "Expected newline after `contract:`")?;
+        self.expect(TokenKind::Indent, "Expected indented contract block")?;
+
+        let mut cycles: Option<u64> = None;
+        let mut on_underflow: Option<ContractPolicy> = None;
+        let mut on_overflow: Option<ContractPolicy> = None;
+
+        while !self.check(TokenKind::Dedent) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(TokenKind::Dedent) {
+                break;
+            }
+
+            let key_tok = self.advance().clone();
+            if key_tok.kind != TokenKind::YamlKey && key_tok.kind != TokenKind::Identifier {
+                return Err(ParseError::new(&key_tok, "Expected cycle contract key"));
+            }
+            let key = key_tok.lexeme;
+            self.expect(TokenKind::Colon, "Expected `:` after contract key")?;
+
+            match key.as_str() {
+                "cycles" => {
+                    let expr = self.parse_expression()?;
+                    let Expr::Number(value) = expr else {
+                        return Err(ParseError::new(
+                            self.peek(),
+                            "Contract `cycles` must be an integer literal",
+                        ));
+                    };
+                    if value <= 0 {
+                        return Err(ParseError::new(
+                            self.peek(),
+                            "Contract `cycles` must be > 0",
+                        ));
+                    }
+                    cycles = Some(value as u64);
+                }
+                "on_underflow" => {
+                    let policy = self.parse_contract_policy("on_underflow")?;
+                    on_underflow = Some(policy);
+                }
+                "on_overflow" => {
+                    let policy = self.parse_contract_policy("on_overflow")?;
+                    on_overflow = Some(policy);
+                }
+                _ => {
+                    return Err(ParseError::new(
+                        self.peek(),
+                        format!("Unknown contract key `{}`", key),
+                    ));
+                }
+            }
+
+            self.consume_newline_if_present();
+        }
+
+        self.expect(TokenKind::Dedent, "Expected end of contract block")?;
+
+        Ok(CycleContract {
+            cycles: cycles.ok_or_else(|| {
+                ParseError::new(self.peek(), "Contract requires `cycles` key")
+            })?,
+            on_underflow: on_underflow.ok_or_else(|| {
+                ParseError::new(self.peek(), "Contract requires `on_underflow` key")
+            })?,
+            on_overflow: on_overflow.ok_or_else(|| {
+                ParseError::new(self.peek(), "Contract requires `on_overflow` key")
+            })?,
+        })
+    }
+
+    fn parse_contract_policy(&mut self, key: &str) -> Result<ContractPolicy, ParseError> {
+        let tok = self.advance().clone();
+        let TokenKind::String = tok.kind else {
+            return Err(ParseError::new(
+                &tok,
+                format!("Contract `{}` must be a string literal", key),
+            ));
+        };
+
+        match tok.lexeme.as_str() {
+            "pad_nop" => Ok(ContractPolicy::PadNop),
+            "compile_error" => Ok(ContractPolicy::CompileError),
+            other => Err(ParseError::new(
+                &tok,
+                format!(
+                    "Invalid contract policy `{}` for `{}`; expected `pad_nop` or `compile_error`",
+                    other, key
+                ),
+            )),
         }
     }
 
@@ -592,4 +712,15 @@ impl Parser {
 pub fn parse_source(source: &str) -> Result<Program, ParseError> {
     let mut parser = Parser::from_source(source)?;
     parser.parse_program()
+}
+
+fn parse_int_literal(lexeme: &str) -> Option<i64> {
+    if let Some(hex) = lexeme
+        .strip_prefix("0x")
+        .or_else(|| lexeme.strip_prefix("0X"))
+    {
+        i64::from_str_radix(hex, 16).ok()
+    } else {
+        lexeme.parse::<i64>().ok()
+    }
 }

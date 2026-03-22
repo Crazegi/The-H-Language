@@ -104,3 +104,45 @@ section .text:
     let result = run_program(&program).expect("runtime should pass");
     assert_eq!(result.render(), "6");
 }
+
+#[test]
+fn parses_and_runs_cycle_contract_execute_block() {
+    let src = r#"section .text:
+  fn hardware_pulse():
+    own r1 = 0x01
+    own r2 = 0x00
+
+    contract:
+      cycles: 16
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mov [port_a], r1
+      add r1, r2
+      mov [port_a], r2
+
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn rejects_invalid_cycle_contract_policy() {
+    let src = r#"section .text:
+  fn main():
+    contract:
+      cycles: 8
+      on_underflow: "pad_nop"
+      on_overflow: "drop"
+    execute:
+      own r1 = 1
+    return 0
+"#;
+
+    let err = parse_source(src).expect_err("invalid policy should fail parse");
+    assert!(err.message.contains("Invalid contract policy"));
+}

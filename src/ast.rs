@@ -13,6 +13,19 @@ pub struct Function {
     pub body: Vec<Stmt>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractPolicy {
+    PadNop,
+    CompileError,
+}
+
+#[derive(Debug, Clone)]
+pub struct CycleContract {
+    pub cycles: u64,
+    pub on_underflow: ContractPolicy,
+    pub on_overflow: ContractPolicy,
+}
+
 #[derive(Debug, Clone)]
 pub enum Stmt {
     OwnDecl { name: String, expr: Expr },
@@ -26,6 +39,10 @@ pub enum Stmt {
     },
     While { condition: Expr, body: Vec<Stmt> },
     Repeat { times: Expr, body: Vec<Stmt> },
+    CycleContract {
+        spec: CycleContract,
+        body: Vec<Stmt>,
+    },
     PrintBlock(Vec<(String, Expr)>),
     Return(Option<Expr>),
     Expr(Expr),

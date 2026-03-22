@@ -168,6 +168,16 @@ impl Lexer {
                     self.advance();
                     tok
                 }
+                '[' => {
+                    let tok = Token::new(TokenKind::LBracket, "[", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                ']' => {
+                    let tok = Token::new(TokenKind::RBracket, "]", self.line, self.column);
+                    self.advance();
+                    tok
+                }
                 '{' => {
                     let tok = Token::new(TokenKind::LBrace, "{", self.line, self.column);
                     self.advance();
@@ -184,7 +194,7 @@ impl Lexer {
                     tok
                 }
                 '"' => self.scan_string()?,
-                c if c.is_ascii_digit() => self.scan_number(),
+                c if c.is_ascii_digit() => self.scan_number()?,
                 c if is_ident_start(c) => self.scan_word(),
                 other => {
                     return Err(LexerError::new(
@@ -309,6 +319,8 @@ impl Lexer {
             "own" => TokenKind::KeywordOwn,
             "ref" => TokenKind::KeywordRef,
             "print" => TokenKind::KeywordPrint,
+            "contract" => TokenKind::KeywordContract,
+            "execute" => TokenKind::KeywordExecute,
             "if" => TokenKind::KeywordIf,
             "else" => TokenKind::KeywordElse,
             "while" => TokenKind::KeywordWhile,
@@ -345,7 +357,7 @@ impl Lexer {
 
         let token = Token::new(kind, s, line, col);
 
-        if token.kind == TokenKind::KeywordPrint {
+        if token.kind == TokenKind::KeywordPrint || token.kind == TokenKind::KeywordContract {
             let mut i = self.pos;
             while let Some(ch) = self.chars.get(i) {
                 if *ch == ' ' {
@@ -362,9 +374,38 @@ impl Lexer {
         token
     }
 
-    fn scan_number(&mut self) -> Token {
+    fn scan_number(&mut self) -> Result<Token, LexerError> {
         let line = self.line;
         let col = self.column;
+
+        if self.current() == Some('0') && matches!(self.peek_char(), Some('x') | Some('X')) {
+            let mut s = String::from("0");
+            self.advance();
+            s.push(self.current().expect("hex prefix must exist"));
+            self.advance();
+
+            let mut digits = 0usize;
+            while let Some(ch) = self.current() {
+                if ch.is_ascii_hexdigit() {
+                    s.push(ch);
+                    self.advance();
+                    digits += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if digits == 0 {
+                return Err(LexerError::new(
+                    line,
+                    col,
+                    "Invalid hexadecimal literal; expected digits after 0x",
+                ));
+            }
+
+            return Ok(Token::new(TokenKind::Number, s, line, col));
+        }
+
         let mut s = String::new();
         while let Some(ch) = self.current() {
             if ch.is_ascii_digit() {
@@ -374,7 +415,7 @@ impl Lexer {
                 break;
             }
         }
-        Token::new(TokenKind::Number, s, line, col)
+        Ok(Token::new(TokenKind::Number, s, line, col))
     }
 
     fn scan_string(&mut self) -> Result<Token, LexerError> {
