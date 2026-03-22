@@ -1,0 +1,16 @@
+[package]
+name = "hl-lexer"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 1 lexer for the H language (.hl)"
+license = "MIT"
+
+[lib]
+name = "hl_lexer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hl-lex"
+path = "src/main.rs"
+
+[dependencies]

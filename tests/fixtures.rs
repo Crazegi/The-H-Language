@@ -1,0 +1,16 @@
+pub const SYNTAX_EXAMPLE: &str = r#"section .data:
+  name: "Engine_Temp"
+
+section .text:
+  fn calculate_temp():
+    own r1 = 45
+    own r2 = 15
+    add r1, r2
+    ref label = &name
+
+    print:
+      event: "diagnostic"
+      sensor: label
+      reading: r1
+      status: "stable"
+"#;
