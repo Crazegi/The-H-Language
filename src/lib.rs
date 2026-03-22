@@ -14,7 +14,11 @@ pub mod vm;
 pub use bytecode::{disassemble, BytecodeFunction, BytecodeProgram, Instruction};
 pub use compiler::{
 	compile_program, compile_program_with_options, render_contract_report_text, CompileError,
-	CompileOptions, CompileResult, ContractCompileReport, CycleProfile, OptimizationLevel,
+	CompileOptions, CompileResult, ContractCompileReport, CycleCostMetadata,
+	CycleCostProfile, CycleProfile, CycleProfileLoadError, OptimizationLevel,
+	ProfileDoctorEntry, ProfileDoctorReport, UnknownCycleCostPolicy,
+	diagnose_cycle_profile_coverage, load_cycle_profiles_from_file,
+	load_cycle_profiles_from_toml_str, render_profile_doctor_report_text,
 };
 pub use error::LexerError;
 pub use evaluator::{run_program, RuntimeError, Value};

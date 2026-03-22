@@ -80,6 +80,45 @@ Available profiles:
 - `avr-like`
 - `cortex-m0-like`
 
+External profile files are also supported via `--cycle-profile-file`.
+Profiles can inherit from built-ins (or other custom profiles), override only selected keys,
+and set unknown-cost behavior.
+
+Profiles can also attach traceability metadata per key:
+- `sources.<key>` (where the number came from, e.g. TRM section)
+- `confidence.<key>` (e.g. `high`, `medium`, `low`)
+- `worst_case_cycles.<key>` (optional worst-case bound)
+
+Example profile file (`examples/cycle_profiles.toml`):
+
+```toml
+[profiles.cortex-m4-like]
+extends = "generic"
+unknown_policy = "strict"
+
+[profiles.cortex-m4-like.costs]
+"instr.mul" = 4
+"expr.mul" = 4
+
+[profiles.cortex-m4-like.sources]
+"instr.mul" = "ARM TRM rev C"
+
+[profiles.cortex-m4-like.confidence]
+"instr.mul" = "high"
+
+[profiles.cortex-m4-like.worst_case_cycles]
+"instr.mul" = 6
+
+[profiles.esp32-safe]
+extends = "generic"
+unknown_policy = "conservative"
+conservative_fallback = 3
+
+[profiles.esp32-safe.costs]
+"instr.div" = 10
+"instr.mod" = 10
+```
+
 Profile impact:
 - Different targets can assign different cycle costs for the same instruction.
 - The same contract can pass in one profile and fail in another.
@@ -93,6 +132,23 @@ Contract report output includes:
 - padded nop count
 - final cycle count
 - underflow and overflow policies
+
+Additional cycle profile flags:
+- `--cycle-profile-file <path>` loads profiles from TOML.
+- `--cycle-profile <name>` selects built-in or file-defined profile name.
+- `--unknown-cycle-cost strict|conservative` overrides selected profile policy.
+- `--unknown-cycle-cost-fallback <n>` overrides conservative fallback cycles.
+
+Game changer: Profile Doctor (`--profile-doctor`)
+- Audits which cycle keys your source actually needs in `contract/execute` blocks.
+- Lists missing keys before compile-time overflow/unknown-cost failures.
+- Prints metadata (source/confidence/worst-case) per key when available.
+
+Example:
+
+```powershell
+cargo run --bin hl-lex -- --profile-doctor examples/cycle_contracts.hl --cycle-profile-file examples/cycle_profiles.toml --cycle-profile esp32-safe --out profile_doctor.txt
+```
 
 ## Example Programs
 

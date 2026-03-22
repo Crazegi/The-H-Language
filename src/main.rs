@@ -4,9 +4,11 @@ use std::path::PathBuf;
 
 use hl_lexer::{
     analyze, compile_h_to_native_artifacts_with_options, compile_program_with_options,
-    disassemble, parse_source, read_package, render_contract_report_text, run_bytecode,
-    run_program, write_package, CompileOptions, CycleProfile, Lexer, OptimizationLevel,
-    TokenKind,
+    diagnose_cycle_profile_coverage,
+    disassemble, load_cycle_profiles_from_file, parse_source, read_package,
+    render_contract_report_text, render_profile_doctor_report_text, run_bytecode, run_program,
+    write_package, CompileOptions, CycleProfile, Lexer, OptimizationLevel, TokenKind,
+    UnknownCycleCostPolicy,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -52,6 +54,7 @@ enum Mode {
     Tokens,
     Ast,
     Compile,
+    ProfileDoctor,
     Pack,
     RunPackage,
     Vm,
@@ -63,7 +66,10 @@ fn main() {
     let mut mode = Mode::Run;
     let mut path: Option<String> = None;
     let mut out_path: Option<String> = None;
-    let mut cycle_profile = CycleProfile::Generic;
+    let mut cycle_profile_name = "generic".to_string();
+    let mut cycle_profile_file: Option<String> = None;
+    let mut unknown_cycle_cost_policy: Option<UnknownCycleCostPolicy> = None;
+    let mut unknown_cycle_cost_fallback: Option<u64> = None;
     let mut contract_report_out: Option<String> = None;
     let mut opt_level = OptimizationLevel::O2;
     let mut const_folding = true;
@@ -77,6 +83,7 @@ fn main() {
             "--tokens" => mode = Mode::Tokens,
             "--ast" => mode = Mode::Ast,
             "--compile" => mode = Mode::Compile,
+            "--profile-doctor" => mode = Mode::ProfileDoctor,
             "--pack" => mode = Mode::Pack,
             "--run-package" => mode = Mode::RunPackage,
             "--vm" => mode = Mode::Vm,
@@ -91,14 +98,45 @@ fn main() {
             }
             "--cycle-profile" => {
                 if i + 1 >= args.len() {
-                    eprintln!("Expected profile after --cycle-profile (generic|avr-like|cortex-m0-like)");
+                    eprintln!("Expected profile after --cycle-profile");
+                    std::process::exit(1);
+                }
+                cycle_profile_name = args[i + 1].clone();
+                i += 1;
+            }
+            "--cycle-profile-file" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected file path after --cycle-profile-file");
+                    std::process::exit(1);
+                }
+                cycle_profile_file = Some(args[i + 1].clone());
+                i += 1;
+            }
+            "--unknown-cycle-cost" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected mode after --unknown-cycle-cost (strict|conservative)");
                     std::process::exit(1);
                 }
                 let value = &args[i + 1];
-                cycle_profile = match CycleProfile::from_str(value) {
-                    Some(v) => v,
+                unknown_cycle_cost_policy = match UnknownCycleCostPolicy::from_str(value) {
+                    Some(v) => Some(v),
                     None => {
-                        eprintln!("Unknown cycle profile `{}`", value);
+                        eprintln!("Unknown unknown-cost mode `{}`", value);
+                        std::process::exit(1);
+                    }
+                };
+                i += 1;
+            }
+            "--unknown-cycle-cost-fallback" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected integer after --unknown-cycle-cost-fallback");
+                    std::process::exit(1);
+                }
+                let value = &args[i + 1];
+                unknown_cycle_cost_fallback = match value.parse::<u64>() {
+                    Ok(v) => Some(v),
+                    Err(_) => {
+                        eprintln!("Invalid fallback `{}`; expected non-negative integer", value);
                         std::process::exit(1);
                     }
                 };
@@ -136,8 +174,53 @@ fn main() {
         i += 1;
     }
 
+    let (cycle_profile, cycle_profile_override) = if let Some(file_path) = cycle_profile_file {
+        let profiles = match load_cycle_profiles_from_file(&file_path) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("Failed to load cycle profiles: {}", err);
+                std::process::exit(1);
+            }
+        };
+
+        let mut selected = match profiles.get(&cycle_profile_name) {
+            Some(p) => p.clone(),
+            None => {
+                eprintln!(
+                    "Unknown cycle profile `{}` in profile file {}",
+                    cycle_profile_name, file_path
+                );
+                std::process::exit(1);
+            }
+        };
+
+        if let Some(policy) = unknown_cycle_cost_policy {
+            selected.unknown_policy = policy;
+        }
+        if let Some(fallback) = unknown_cycle_cost_fallback {
+            selected.conservative_fallback = fallback;
+        }
+
+        let base = CycleProfile::from_str(&cycle_profile_name).unwrap_or(CycleProfile::Generic);
+        (base, Some(selected))
+    } else {
+        let base = match CycleProfile::from_str(&cycle_profile_name) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "Unknown built-in cycle profile `{}`. Use --cycle-profile-file for custom profiles.",
+                    cycle_profile_name
+                );
+                std::process::exit(1);
+            }
+        };
+
+        (base, None)
+    };
+
     let compile_options = CompileOptions {
         cycle_profile,
+        cycle_profile_override,
         opt_level,
         const_folding,
         peephole,
@@ -231,6 +314,33 @@ fn main() {
                     std::process::exit(1);
                 }
                 println!("contract_report: {}", path);
+            }
+        }
+        Mode::ProfileDoctor => {
+            let program = match parse_source(&input) {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("Parse error: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            if let Err(err) = analyze(&program) {
+                eprintln!("Semantic error: {}", err);
+                std::process::exit(1);
+            }
+
+            let report = diagnose_cycle_profile_coverage(&program, &compile_options);
+            let text = render_profile_doctor_report_text(&report);
+
+            if let Some(path) = out_path {
+                if let Err(err) = fs::write(&path, text) {
+                    eprintln!("Failed to write {}: {}", path, err);
+                    std::process::exit(1);
+                }
+                println!("profile_doctor_output: {}", path);
+            } else {
+                println!("{}", text);
             }
         }
         Mode::Pack => {

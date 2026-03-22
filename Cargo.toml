@@ -14,3 +14,4 @@ name = "hl-lex"
 path = "src/main.rs"
 
 [dependencies]
+toml = "0.8"

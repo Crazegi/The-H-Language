@@ -1,0 +1,25 @@
+[profiles.cortex-m4-like]
+extends = "generic"
+unknown_policy = "strict"
+
+[profiles.cortex-m4-like.costs]
+"instr.mul" = 4
+"expr.mul" = 4
+
+[profiles.cortex-m4-like.sources]
+"instr.mul" = "ARM TRM rev C"
+
+[profiles.cortex-m4-like.confidence]
+"instr.mul" = "high"
+
+[profiles.cortex-m4-like.worst_case_cycles]
+"instr.mul" = 6
+
+[profiles.esp32-safe]
+extends = "generic"
+unknown_policy = "conservative"
+conservative_fallback = 3
+
+[profiles.esp32-safe.costs]
+"instr.div" = 10
+"instr.mod" = 10

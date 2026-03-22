@@ -1,8 +1,20 @@
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use hl_lexer::{
-  analyze, compile_program, compile_program_with_options, parse_source,
+  analyze, compile_program, compile_program_with_options, load_cycle_profiles_from_file,
+  diagnose_cycle_profile_coverage, parse_source,
   render_contract_report_text, run_bytecode, CompileOptions, CycleProfile, Instruction,
-  OptimizationLevel,
+  OptimizationLevel, UnknownCycleCostPolicy,
 };
+
+fn unique_profile_path(file_name: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("hl_profiles_{}_{}", nanos, file_name))
+}
 
 const PROGRAM: &str = r#"section .data:
   threshold: 10
@@ -152,6 +164,7 @@ fn cycle_profile_changes_contract_budget_behavior() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
         ..Default::default()
         },
     )
@@ -171,6 +184,7 @@ fn cycle_profile_changes_contract_budget_behavior() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::AvrLike,
+          cycle_profile_override: None,
         ..Default::default()
         },
     )
@@ -200,6 +214,7 @@ fn contract_report_contains_profile_and_padding() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
         ..Default::default()
         },
     )
@@ -225,6 +240,7 @@ fn optimizer_folds_constant_expressions() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
             opt_level: OptimizationLevel::O0,
             const_folding: true,
             peephole: true,
@@ -238,6 +254,7 @@ fn optimizer_folds_constant_expressions() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
             opt_level: OptimizationLevel::O3,
             const_folding: true,
             peephole: true,
@@ -289,6 +306,7 @@ fn relaxed_contract_mode_allows_compile_error_policies() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
             opt_level: OptimizationLevel::O2,
             const_folding: true,
             peephole: true,
@@ -303,6 +321,7 @@ fn relaxed_contract_mode_allows_compile_error_policies() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+          cycle_profile_override: None,
             opt_level: OptimizationLevel::O2,
             const_folding: true,
             peephole: true,
@@ -397,3 +416,223 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
       .contains("repeat` count must be compile-time constant")
       || err.message.contains("count must be compile-time constant"));
 }
+
+  #[test]
+  fn external_profile_inheritance_overrides_mul_cost() {
+    let profile_path = unique_profile_path("inherit.toml");
+    let profile_text = r#"[profiles.cortex-m4-like]
+  extends = "generic"
+
+  [profiles.cortex-m4-like.costs]
+  "instr.mul" = 4
+  "expr.mul" = 4
+  "#;
+    fs::write(&profile_path, profile_text).expect("profile file write should succeed");
+
+    let src = r#"section .text:
+  fn main():
+    own r1 = 20
+    own r2 = 4
+    contract:
+      cycles: 3
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mul r1, r2
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let profiles = load_cycle_profiles_from_file(&profile_path)
+      .expect("external profiles should load successfully");
+    let selected = profiles
+      .get("cortex-m4-like")
+      .expect("custom profile should exist")
+      .clone();
+
+    let err = compile_program_with_options(
+      &program,
+      CompileOptions {
+        cycle_profile: CycleProfile::Generic,
+        cycle_profile_override: Some(selected),
+        ..Default::default()
+      },
+    )
+    .expect_err("custom profile should overflow with mul cost override");
+    assert!(err.message.contains("overflow"));
+
+    let _ = fs::remove_file(profile_path);
+  }
+
+  #[test]
+  fn strict_unknown_cost_policy_rejects_missing_keys() {
+    let profile_path = unique_profile_path("strict.toml");
+    let profile_text = r#"[profiles.minimal-strict]
+  unknown_policy = "strict"
+
+  [profiles.minimal-strict.costs]
+  "instr.mov" = 1
+  "#;
+    fs::write(&profile_path, profile_text).expect("profile file write should succeed");
+
+    let src = r#"section .text:
+  fn main():
+    own r1 = 1
+    own r2 = 2
+    contract:
+      cycles: 4
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let profiles = load_cycle_profiles_from_file(&profile_path)
+      .expect("external profiles should load successfully");
+    let selected = profiles
+      .get("minimal-strict")
+      .expect("custom profile should exist")
+      .clone();
+
+    let err = compile_program_with_options(
+      &program,
+      CompileOptions {
+        cycle_profile: CycleProfile::Generic,
+        cycle_profile_override: Some(selected),
+        ..Default::default()
+      },
+    )
+    .expect_err("strict mode should reject unknown cycle keys");
+    assert!(err.message.contains("Unknown cycle cost key"));
+
+    let _ = fs::remove_file(profile_path);
+  }
+
+  #[test]
+  fn conservative_unknown_cost_policy_uses_fallback() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = 1
+    own r2 = 2
+    contract:
+      cycles: 4
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let mut selected = hl_lexer::CycleCostProfile {
+      name: "conservative-minimal".to_string(),
+      costs: std::collections::HashMap::new(),
+      metadata: std::collections::HashMap::new(),
+      unknown_policy: UnknownCycleCostPolicy::Conservative,
+      conservative_fallback: 2,
+    };
+    selected.costs.insert("instr.mov".to_string(), 1);
+
+    let compiled = compile_program_with_options(
+      &program,
+      CompileOptions {
+        cycle_profile: CycleProfile::Generic,
+        cycle_profile_override: Some(selected),
+        ..Default::default()
+      },
+    )
+    .expect("conservative unknown mode should compile");
+
+    let text = render_contract_report_text(&compiled.contract_reports);
+    assert!(text.contains("profile=conservative-minimal"));
+  }
+
+  #[test]
+  fn profile_loader_parses_metadata_fields() {
+    let profile_path = unique_profile_path("metadata.toml");
+    let profile_text = r#"[profiles.arm-m4]
+  extends = "generic"
+
+  [profiles.arm-m4.costs]
+  "instr.mul" = 4
+
+  [profiles.arm-m4.sources]
+  "instr.mul" = "ARM TRM rev C"
+
+  [profiles.arm-m4.confidence]
+  "instr.mul" = "high"
+
+  [profiles.arm-m4.worst_case_cycles]
+  "instr.mul" = 6
+  "#;
+    fs::write(&profile_path, profile_text).expect("profile file write should succeed");
+
+    let profiles = load_cycle_profiles_from_file(&profile_path)
+      .expect("profile load should succeed");
+    let profile = profiles.get("arm-m4").expect("profile should exist");
+    let meta = profile
+      .metadata
+      .get("instr.mul")
+      .expect("metadata for instr.mul should exist");
+
+    assert_eq!(meta.source.as_deref(), Some("ARM TRM rev C"));
+    assert_eq!(meta.confidence.as_deref(), Some("high"));
+    assert_eq!(meta.worst_case_cycles, Some(6));
+
+    let _ = fs::remove_file(profile_path);
+  }
+
+  #[test]
+  fn profile_doctor_reports_missing_keys() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = 2
+    own r2 = 3
+    contract:
+      cycles: 6
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      own x = r1 + r2
+      mul x, r2
+      mov [port_a], x
+    return x
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic should pass");
+
+    let mut profile = hl_lexer::CycleCostProfile {
+      name: "doctor-test".to_string(),
+      costs: std::collections::HashMap::new(),
+      metadata: std::collections::HashMap::new(),
+      unknown_policy: UnknownCycleCostPolicy::Strict,
+      conservative_fallback: 1,
+    };
+    profile.costs.insert("instr.mov".to_string(), 1);
+
+    let report = diagnose_cycle_profile_coverage(
+      &program,
+      &CompileOptions {
+        cycle_profile: CycleProfile::Generic,
+        cycle_profile_override: Some(profile),
+        ..Default::default()
+      },
+    );
+
+    assert!(report.required_keys.iter().any(|k| k == "instr.mul"));
+    assert!(report.required_keys.iter().any(|k| k == "expr.binary.default"));
+    assert!(report.missing_keys.iter().any(|k| k == "instr.mul"));
+    assert!(report.missing_keys.iter().any(|k| k == "stmt.store"));
+  }

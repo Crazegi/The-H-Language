@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 
 use crate::ast::{
     BinaryOp, ContractPolicy, Expr, Instruction as AstInstruction, Program, Stmt, UnaryOp,
@@ -11,6 +13,77 @@ pub enum CycleProfile {
     Generic,
     AvrLike,
     CortexM0Like,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnknownCycleCostPolicy {
+    Strict,
+    Conservative,
+}
+
+impl UnknownCycleCostPolicy {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "strict" => Some(Self::Strict),
+            "conservative" => Some(Self::Conservative),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CycleCostProfile {
+    pub name: String,
+    pub costs: HashMap<String, u64>,
+    pub metadata: HashMap<String, CycleCostMetadata>,
+    pub unknown_policy: UnknownCycleCostPolicy,
+    pub conservative_fallback: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CycleCostMetadata {
+    pub source: Option<String>,
+    pub confidence: Option<String>,
+    pub worst_case_cycles: Option<u64>,
+}
+
+impl CycleCostProfile {
+    fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CycleProfileLoadError {
+    pub message: String,
+}
+
+impl CycleProfileLoadError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CycleProfileLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CycleProfileLoadError {}
+
+#[derive(Debug, Clone)]
+struct RawProfileDef {
+    extends: Option<String>,
+    unknown_policy: Option<UnknownCycleCostPolicy>,
+    conservative_fallback: Option<u64>,
+    costs: HashMap<String, u64>,
+    sources: HashMap<String, String>,
+    confidence: HashMap<String, String>,
+    worst_case_cycles: HashMap<String, u64>,
 }
 
 impl CycleProfile {
@@ -55,6 +128,7 @@ impl OptimizationLevel {
 #[derive(Debug, Clone)]
 pub struct CompileOptions {
     pub cycle_profile: CycleProfile,
+    pub cycle_profile_override: Option<CycleCostProfile>,
     pub opt_level: OptimizationLevel,
     pub const_folding: bool,
     pub peephole: bool,
@@ -66,6 +140,7 @@ impl Default for CompileOptions {
     fn default() -> Self {
         Self {
             cycle_profile: CycleProfile::Generic,
+            cycle_profile_override: None,
             opt_level: OptimizationLevel::O2,
             const_folding: true,
             peephole: true,
@@ -79,13 +154,33 @@ impl Default for CompileOptions {
 pub struct ContractCompileReport {
     pub function_name: String,
     pub contract_index: usize,
-    pub cycle_profile: CycleProfile,
+    pub cycle_profile: String,
     pub declared_cycles: u64,
     pub measured_cycles: u64,
     pub padded_nops: u64,
     pub final_cycles: u64,
     pub on_underflow: ContractPolicy,
     pub on_overflow: ContractPolicy,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileDoctorEntry {
+    pub key: String,
+    pub status: String,
+    pub cost: Option<u64>,
+    pub source: Option<String>,
+    pub confidence: Option<String>,
+    pub worst_case_cycles: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileDoctorReport {
+    pub profile_name: String,
+    pub unknown_policy: UnknownCycleCostPolicy,
+    pub conservative_fallback: u64,
+    pub required_keys: Vec<String>,
+    pub missing_keys: Vec<String>,
+    pub entries: Vec<ProfileDoctorEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +209,414 @@ impl std::fmt::Display for CompileError {
 }
 
 impl std::error::Error for CompileError {}
+
+pub fn load_cycle_profiles_from_file(
+    path: impl AsRef<Path>,
+) -> Result<HashMap<String, CycleCostProfile>, CycleProfileLoadError> {
+    let content = fs::read_to_string(path.as_ref()).map_err(|err| {
+        CycleProfileLoadError::new(format!(
+            "Failed to read cycle profile file {}: {}",
+            path.as_ref().display(),
+            err
+        ))
+    })?;
+    load_cycle_profiles_from_toml_str(&content)
+}
+
+pub fn load_cycle_profiles_from_toml_str(
+    input: &str,
+) -> Result<HashMap<String, CycleCostProfile>, CycleProfileLoadError> {
+    let value: toml::Value = input
+        .parse()
+        .map_err(|err| CycleProfileLoadError::new(format!("Invalid TOML in cycle profile file: {}", err)))?;
+
+    let mut raw_defs: HashMap<String, RawProfileDef> = HashMap::new();
+    let profiles_table = value
+        .get("profiles")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| {
+            CycleProfileLoadError::new("Cycle profile file must define [profiles.<name>] tables")
+        })?;
+
+    for (name, raw) in profiles_table {
+        let table = raw.as_table().ok_or_else(|| {
+            CycleProfileLoadError::new(format!("profiles.{} must be a TOML table", name))
+        })?;
+
+        let extends = table
+            .get("extends")
+            .map(|v| {
+                v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                    CycleProfileLoadError::new(format!(
+                        "profiles.{}.extends must be a string",
+                        name
+                    ))
+                })
+            })
+            .transpose()?;
+
+        let unknown_policy = table
+            .get("unknown_policy")
+            .map(|v| {
+                let raw = v.as_str().ok_or_else(|| {
+                    CycleProfileLoadError::new(format!(
+                        "profiles.{}.unknown_policy must be a string",
+                        name
+                    ))
+                })?;
+                UnknownCycleCostPolicy::from_str(raw).ok_or_else(|| {
+                    CycleProfileLoadError::new(format!(
+                        "profiles.{}.unknown_policy must be strict or conservative",
+                        name
+                    ))
+                })
+            })
+            .transpose()?;
+
+        let conservative_fallback = table
+            .get("conservative_fallback")
+            .map(|v| {
+                v.as_integer()
+                    .and_then(|n| if n >= 0 { Some(n as u64) } else { None })
+                    .ok_or_else(|| {
+                        CycleProfileLoadError::new(format!(
+                            "profiles.{}.conservative_fallback must be a non-negative integer",
+                            name
+                        ))
+                    })
+            })
+            .transpose()?;
+
+        let mut costs = HashMap::new();
+        if let Some(costs_table) = table.get("costs") {
+            let costs_table = costs_table.as_table().ok_or_else(|| {
+                CycleProfileLoadError::new(format!("profiles.{}.costs must be a table", name))
+            })?;
+            collect_cost_entries(name, "", costs_table, &mut costs)?;
+        }
+
+        let mut sources = HashMap::new();
+        if let Some(sources_table) = table.get("sources") {
+            let sources_table = sources_table.as_table().ok_or_else(|| {
+                CycleProfileLoadError::new(format!("profiles.{}.sources must be a table", name))
+            })?;
+            collect_string_entries(name, "sources", "", sources_table, &mut sources)?;
+        }
+
+        let mut confidence = HashMap::new();
+        if let Some(confidence_table) = table.get("confidence") {
+            let confidence_table = confidence_table.as_table().ok_or_else(|| {
+                CycleProfileLoadError::new(format!("profiles.{}.confidence must be a table", name))
+            })?;
+            collect_string_entries(
+                name,
+                "confidence",
+                "",
+                confidence_table,
+                &mut confidence,
+            )?;
+        }
+
+        let mut worst_case_cycles = HashMap::new();
+        if let Some(worst_case_table) = table.get("worst_case_cycles") {
+            let worst_case_table = worst_case_table.as_table().ok_or_else(|| {
+                CycleProfileLoadError::new(format!(
+                    "profiles.{}.worst_case_cycles must be a table",
+                    name
+                ))
+            })?;
+            collect_u64_entries(
+                name,
+                "worst_case_cycles",
+                "",
+                worst_case_table,
+                &mut worst_case_cycles,
+            )?;
+        }
+
+        raw_defs.insert(
+            name.clone(),
+            RawProfileDef {
+                extends,
+                unknown_policy,
+                conservative_fallback,
+                costs,
+                sources,
+                confidence,
+                worst_case_cycles,
+            },
+        );
+    }
+
+    let mut resolved = built_in_cycle_profiles();
+    let names: Vec<String> = raw_defs.keys().cloned().collect();
+    let mut stack = HashSet::new();
+    for name in names {
+        resolve_custom_profile(&name, &raw_defs, &mut resolved, &mut stack)?;
+    }
+
+    Ok(resolved)
+}
+
+fn collect_cost_entries(
+    profile_name: &str,
+    prefix: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    out: &mut HashMap<String, u64>,
+) -> Result<(), CycleProfileLoadError> {
+    for (key, value) in table {
+        let full_key = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+
+        if let Some(cost) = value
+            .as_integer()
+            .and_then(|n| if n >= 0 { Some(n as u64) } else { None })
+        {
+            out.insert(full_key, cost);
+            continue;
+        }
+
+        if let Some(child) = value.as_table() {
+            collect_cost_entries(profile_name, &full_key, child, out)?;
+            continue;
+        }
+
+        return Err(CycleProfileLoadError::new(format!(
+            "profiles.{}.costs.{} must be a non-negative integer",
+            profile_name, full_key
+        )));
+    }
+    Ok(())
+}
+
+fn collect_string_entries(
+    profile_name: &str,
+    table_name: &str,
+    prefix: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    out: &mut HashMap<String, String>,
+) -> Result<(), CycleProfileLoadError> {
+    for (key, value) in table {
+        let full_key = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+
+        if let Some(v) = value.as_str() {
+            out.insert(full_key, v.to_string());
+            continue;
+        }
+
+        if let Some(child) = value.as_table() {
+            collect_string_entries(profile_name, table_name, &full_key, child, out)?;
+            continue;
+        }
+
+        return Err(CycleProfileLoadError::new(format!(
+            "profiles.{}.{}.{} must be a string",
+            profile_name, table_name, full_key
+        )));
+    }
+    Ok(())
+}
+
+fn collect_u64_entries(
+    profile_name: &str,
+    table_name: &str,
+    prefix: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    out: &mut HashMap<String, u64>,
+) -> Result<(), CycleProfileLoadError> {
+    for (key, value) in table {
+        let full_key = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+
+        if let Some(v) = value
+            .as_integer()
+            .and_then(|n| if n >= 0 { Some(n as u64) } else { None })
+        {
+            out.insert(full_key, v);
+            continue;
+        }
+
+        if let Some(child) = value.as_table() {
+            collect_u64_entries(profile_name, table_name, &full_key, child, out)?;
+            continue;
+        }
+
+        return Err(CycleProfileLoadError::new(format!(
+            "profiles.{}.{}.{} must be a non-negative integer",
+            profile_name, table_name, full_key
+        )));
+    }
+    Ok(())
+}
+
+fn built_in_cycle_profiles() -> HashMap<String, CycleCostProfile> {
+    let mut out = HashMap::new();
+
+    out.insert(
+        "generic".to_string(),
+        builtin_profile_for(CycleProfile::Generic).with_name("generic"),
+    );
+    out.insert(
+        "avr-like".to_string(),
+        builtin_profile_for(CycleProfile::AvrLike).with_name("avr-like"),
+    );
+    out.insert(
+        "cortex-m0-like".to_string(),
+        builtin_profile_for(CycleProfile::CortexM0Like).with_name("cortex-m0-like"),
+    );
+
+    out
+}
+
+fn resolve_custom_profile(
+    name: &str,
+    raw_defs: &HashMap<String, RawProfileDef>,
+    resolved: &mut HashMap<String, CycleCostProfile>,
+    stack: &mut HashSet<String>,
+) -> Result<CycleCostProfile, CycleProfileLoadError> {
+    if let Some(profile) = resolved.get(name) {
+        return Ok(profile.clone());
+    }
+
+    let Some(def) = raw_defs.get(name) else {
+        return Err(CycleProfileLoadError::new(format!(
+            "Unknown parent cycle profile `{}`",
+            name
+        )));
+    };
+
+    if !stack.insert(name.to_string()) {
+        return Err(CycleProfileLoadError::new(format!(
+            "Cycle profile inheritance cycle detected at `{}`",
+            name
+        )));
+    }
+
+    let mut base = if let Some(parent) = &def.extends {
+        resolve_custom_profile(parent, raw_defs, resolved, stack)?
+    } else {
+        CycleCostProfile {
+            name: name.to_string(),
+            costs: HashMap::new(),
+            metadata: HashMap::new(),
+            unknown_policy: UnknownCycleCostPolicy::Strict,
+            conservative_fallback: 1,
+        }
+    };
+
+    for (k, v) in &def.costs {
+        base.costs.insert(k.clone(), *v);
+    }
+    for (k, v) in &def.sources {
+        base.metadata
+            .entry(k.clone())
+            .or_default()
+            .source = Some(v.clone());
+    }
+    for (k, v) in &def.confidence {
+        base.metadata
+            .entry(k.clone())
+            .or_default()
+            .confidence = Some(v.clone());
+    }
+    for (k, v) in &def.worst_case_cycles {
+        base.metadata
+            .entry(k.clone())
+            .or_default()
+            .worst_case_cycles = Some(*v);
+    }
+    if let Some(policy) = def.unknown_policy {
+        base.unknown_policy = policy;
+    }
+    if let Some(fallback) = def.conservative_fallback {
+        base.conservative_fallback = fallback;
+    }
+    base.name = name.to_string();
+
+    stack.remove(name);
+    resolved.insert(name.to_string(), base.clone());
+    Ok(base)
+}
+
+fn builtin_profile_for(profile: CycleProfile) -> CycleCostProfile {
+    let mut costs = HashMap::new();
+
+    costs.insert("instr.mov".to_string(), 1);
+    costs.insert("instr.add".to_string(), 1);
+    costs.insert("instr.sub".to_string(), 1);
+    costs.insert("instr.cmp".to_string(), 1);
+    costs.insert(
+        "instr.mul".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 3,
+            CycleProfile::CortexM0Like => 1,
+        },
+    );
+    costs.insert(
+        "instr.div".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 4,
+            CycleProfile::CortexM0Like => 8,
+        },
+    );
+    costs.insert(
+        "instr.mod".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 4,
+            CycleProfile::CortexM0Like => 8,
+        },
+    );
+
+    costs.insert("expr.atom".to_string(), 1);
+    costs.insert("expr.unary".to_string(), 1);
+    costs.insert("expr.binary.default".to_string(), 1);
+    costs.insert(
+        "expr.mul".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 3,
+            CycleProfile::CortexM0Like => 1,
+        },
+    );
+    costs.insert(
+        "expr.div".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 4,
+            CycleProfile::CortexM0Like => 8,
+        },
+    );
+    costs.insert(
+        "expr.mod".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 4,
+            CycleProfile::CortexM0Like => 8,
+        },
+    );
+    costs.insert("stmt.store".to_string(), 1);
+
+    CycleCostProfile {
+        name: profile.as_str().to_string(),
+        costs,
+        metadata: HashMap::new(),
+        unknown_policy: UnknownCycleCostPolicy::Strict,
+        conservative_fallback: 1,
+    }
+}
 
 pub fn compile_program(program: &Program) -> Result<BytecodeProgram, CompileError> {
     Ok(compile_program_with_options(program, CompileOptions::default())?.bytecode)
@@ -162,9 +665,201 @@ pub fn compile_program_with_options(
     })
 }
 
+pub fn diagnose_cycle_profile_coverage(
+    program: &Program,
+    options: &CompileOptions,
+) -> ProfileDoctorReport {
+    let active = options
+        .cycle_profile_override
+        .clone()
+        .unwrap_or_else(|| builtin_profile_for(options.cycle_profile));
+
+    let mut required = std::collections::BTreeSet::new();
+    for function in &program.functions {
+        for stmt in &function.body {
+            collect_required_cycle_keys_stmt(stmt, &mut required);
+        }
+    }
+
+    let required_keys: Vec<String> = required.into_iter().collect();
+    let mut missing_keys = Vec::new();
+    let mut entries = Vec::new();
+
+    for key in &required_keys {
+        let cost = active.costs.get(key).copied();
+        let meta = active.metadata.get(key);
+        let status = if cost.is_some() {
+            "known".to_string()
+        } else {
+            missing_keys.push(key.clone());
+            match active.unknown_policy {
+                UnknownCycleCostPolicy::Strict => "missing_strict_error".to_string(),
+                UnknownCycleCostPolicy::Conservative => "missing_conservative_fallback".to_string(),
+            }
+        };
+
+        entries.push(ProfileDoctorEntry {
+            key: key.clone(),
+            status,
+            cost,
+            source: meta.and_then(|m| m.source.clone()),
+            confidence: meta.and_then(|m| m.confidence.clone()),
+            worst_case_cycles: meta.and_then(|m| m.worst_case_cycles),
+        });
+    }
+
+    ProfileDoctorReport {
+        profile_name: active.name,
+        unknown_policy: active.unknown_policy,
+        conservative_fallback: active.conservative_fallback,
+        required_keys,
+        missing_keys,
+        entries,
+    }
+}
+
+pub fn render_profile_doctor_report_text(report: &ProfileDoctorReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "profile={} unknown_policy={:?} conservative_fallback={} required_keys={} missing_keys={}\n",
+        report.profile_name,
+        report.unknown_policy,
+        report.conservative_fallback,
+        report.required_keys.len(),
+        report.missing_keys.len()
+    ));
+
+    for entry in &report.entries {
+        out.push_str(&format!(
+            "key={} status={} cost={} confidence={} worst_case={} source={}\n",
+            entry.key,
+            entry.status,
+            entry
+                .cost
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            entry
+                .confidence
+                .as_deref()
+                .unwrap_or("n/a"),
+            entry
+                .worst_case_cycles
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            entry.source.as_deref().unwrap_or("n/a")
+        ));
+    }
+
+    out
+}
+
+fn collect_required_cycle_keys_stmt(
+    stmt: &Stmt,
+    keys: &mut std::collections::BTreeSet<String>,
+) {
+    match stmt {
+        Stmt::CycleContract { body, .. } => {
+            for stmt in body {
+                collect_execute_required_cycle_keys(stmt, keys);
+            }
+        }
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for stmt in then_body {
+                collect_required_cycle_keys_stmt(stmt, keys);
+            }
+            for stmt in else_body {
+                collect_required_cycle_keys_stmt(stmt, keys);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::Repeat { body, .. } => {
+            for stmt in body {
+                collect_required_cycle_keys_stmt(stmt, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_execute_required_cycle_keys(
+    stmt: &Stmt,
+    keys: &mut std::collections::BTreeSet<String>,
+) {
+    match stmt {
+        Stmt::Instruction { op, .. } => {
+            let key = match op {
+                AstInstruction::Mov => "instr.mov",
+                AstInstruction::Add => "instr.add",
+                AstInstruction::Sub => "instr.sub",
+                AstInstruction::Mul => "instr.mul",
+                AstInstruction::Div => "instr.div",
+                AstInstruction::Mod => "instr.mod",
+                AstInstruction::Cmp => "instr.cmp",
+            };
+            keys.insert(key.to_string());
+        }
+        Stmt::OwnDecl { expr, .. } | Stmt::Assign { expr, .. } => {
+            collect_expr_cycle_keys(expr, keys);
+            keys.insert("stmt.store".to_string());
+        }
+        Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            collect_expr_cycle_keys(condition, keys);
+            for stmt in then_body {
+                collect_execute_required_cycle_keys(stmt, keys);
+            }
+            for stmt in else_body {
+                collect_execute_required_cycle_keys(stmt, keys);
+            }
+        }
+        Stmt::Repeat { times, body } => {
+            collect_expr_cycle_keys(times, keys);
+            for stmt in body {
+                collect_execute_required_cycle_keys(stmt, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<String>) {
+    match expr {
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+            keys.insert("expr.atom".to_string());
+        }
+        Expr::Unary { rhs, .. } => {
+            collect_expr_cycle_keys(rhs, keys);
+            keys.insert("expr.unary".to_string());
+        }
+        Expr::Binary { left, op, right } => {
+            collect_expr_cycle_keys(left, keys);
+            collect_expr_cycle_keys(right, keys);
+            let key = match op {
+                BinaryOp::Mul => "expr.mul",
+                BinaryOp::Div => "expr.div",
+                BinaryOp::Mod => "expr.mod",
+                _ => "expr.binary.default",
+            };
+            keys.insert(key.to_string());
+        }
+        Expr::Call { .. } => {
+            // Calls are currently rejected in execute blocks, but we still record
+            // this baseline expression category for profile completeness diagnostics.
+            keys.insert("expr.atom".to_string());
+        }
+    }
+}
+
 struct FunctionCompiler {
     function_name: String,
     options: CompileOptions,
+    active_cycle_profile: CycleCostProfile,
     code: Vec<Instruction>,
     temp_counter: usize,
     contract_counter: usize,
@@ -173,9 +868,15 @@ struct FunctionCompiler {
 
 impl FunctionCompiler {
     fn new(function_name: String, options: CompileOptions) -> Self {
+        let active_cycle_profile = options
+            .cycle_profile_override
+            .clone()
+            .unwrap_or_else(|| builtin_profile_for(options.cycle_profile));
+
         Self {
             function_name,
             options,
+            active_cycle_profile,
             code: Vec::new(),
             temp_counter: 0,
             contract_counter: 0,
@@ -457,7 +1158,7 @@ impl FunctionCompiler {
                         "Cycle contract overflow in function `{}` contract #{} (profile: {}): block costs {} cycles but contract allows {}",
                         self.function_name,
                         contract_index,
-                        self.options.cycle_profile.as_str(),
+                        self.active_cycle_profile.name,
                         total_cycles,
                         spec.cycles
                     )));
@@ -478,7 +1179,7 @@ impl FunctionCompiler {
                         "Cycle contract underflow in function `{}` contract #{} (profile: {}): block costs {} cycles but contract requires {}",
                         self.function_name,
                         contract_index,
-                        self.options.cycle_profile.as_str(),
+                        self.active_cycle_profile.name,
                         total_cycles,
                         spec.cycles
                     )));
@@ -497,7 +1198,7 @@ impl FunctionCompiler {
         self.contract_reports.push(ContractCompileReport {
             function_name: self.function_name.clone(),
             contract_index,
-            cycle_profile: self.options.cycle_profile,
+            cycle_profile: self.active_cycle_profile.name.clone(),
             declared_cycles: spec.cycles,
             measured_cycles: total_cycles,
             padded_nops,
@@ -516,7 +1217,7 @@ impl FunctionCompiler {
     ) -> Result<u64, CompileError> {
         match stmt {
             Stmt::Instruction { op, target, rhs } => {
-                let cost = stmt_cycle_cost(stmt, self.options.cycle_profile)?;
+                let cost = stmt_cycle_cost(stmt, &self.active_cycle_profile)?;
                 self.compile_stmt(stmt)?;
 
                 if !is_memory_target(target) {
@@ -550,9 +1251,9 @@ impl FunctionCompiler {
             }
             Stmt::OwnDecl { name, expr } => {
                 self.compile_stmt(stmt)?;
-                let mut cost = expr_cycle_cost(expr, self.options.cycle_profile)?;
+                let mut cost = expr_cycle_cost(expr, &self.active_cycle_profile)?;
                 cost = cost
-                    .checked_add(1)
+                    .checked_add(cycle_cost(&self.active_cycle_profile, "stmt.store")?)
                     .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
 
                 if let Some(value) =
@@ -566,9 +1267,9 @@ impl FunctionCompiler {
             }
             Stmt::Assign { name, expr } => {
                 self.compile_stmt(stmt)?;
-                let mut cost = expr_cycle_cost(expr, self.options.cycle_profile)?;
+                let mut cost = expr_cycle_cost(expr, &self.active_cycle_profile)?;
                 cost = cost
-                    .checked_add(1)
+                    .checked_add(cycle_cost(&self.active_cycle_profile, "stmt.store")?)
                     .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
 
                 if let Some(value) =
@@ -675,30 +1376,39 @@ fn is_memory_target(target: &str) -> bool {
     target.starts_with('[') && target.ends_with(']') && target.len() > 2
 }
 
-fn expr_cycle_cost(expr: &Expr, profile: CycleProfile) -> Result<u64, CompileError> {
+fn cycle_cost(profile: &CycleCostProfile, key: &str) -> Result<u64, CompileError> {
+    if let Some(cost) = profile.costs.get(key) {
+        return Ok(*cost);
+    }
+
+    match profile.unknown_policy {
+        UnknownCycleCostPolicy::Strict => Err(CompileError::new(format!(
+            "Unknown cycle cost key `{}` for profile `{}`",
+            key, profile.name
+        ))),
+        UnknownCycleCostPolicy::Conservative => Ok(profile.conservative_fallback),
+    }
+}
+
+fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, CompileError> {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => Ok(1),
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+            cycle_cost(profile, "expr.atom")
+        }
         Expr::Unary { rhs, .. } => {
             let rhs_cost = expr_cycle_cost(rhs, profile)?;
             rhs_cost
-                .checked_add(1)
+                .checked_add(cycle_cost(profile, "expr.unary")?)
                 .ok_or_else(|| CompileError::new("Cycle count overflow in expression"))
         }
         Expr::Binary { left, op, right } => {
             let left_cost = expr_cycle_cost(left, profile)?;
             let right_cost = expr_cycle_cost(right, profile)?;
             let op_cost = match op {
-                BinaryOp::Mul => match profile {
-                    CycleProfile::Generic => 2,
-                    CycleProfile::AvrLike => 3,
-                    CycleProfile::CortexM0Like => 1,
-                },
-                BinaryOp::Div | BinaryOp::Mod => match profile {
-                    CycleProfile::Generic => 2,
-                    CycleProfile::AvrLike => 4,
-                    CycleProfile::CortexM0Like => 8,
-                },
-                _ => 1,
+                BinaryOp::Mul => cycle_cost(profile, "expr.mul")?,
+                BinaryOp::Div => cycle_cost(profile, "expr.div")?,
+                BinaryOp::Mod => cycle_cost(profile, "expr.mod")?,
+                _ => cycle_cost(profile, "expr.binary.default")?,
             };
 
             left_cost
@@ -712,27 +1422,16 @@ fn expr_cycle_cost(expr: &Expr, profile: CycleProfile) -> Result<u64, CompileErr
     }
 }
 
-fn stmt_cycle_cost(stmt: &Stmt, profile: CycleProfile) -> Result<u64, CompileError> {
+fn stmt_cycle_cost(stmt: &Stmt, profile: &CycleCostProfile) -> Result<u64, CompileError> {
     match stmt {
         Stmt::Instruction { op, .. } => Ok(match op {
-            AstInstruction::Mov => 1,
-            AstInstruction::Add | AstInstruction::Sub => 1,
-            AstInstruction::Cmp => 1,
-            AstInstruction::Mul => match profile {
-                CycleProfile::Generic => 2,
-                CycleProfile::AvrLike => 3,
-                CycleProfile::CortexM0Like => 1,
-            },
-            AstInstruction::Div => match profile {
-                CycleProfile::Generic => 2,
-                CycleProfile::AvrLike => 4,
-                CycleProfile::CortexM0Like => 8,
-            },
-            AstInstruction::Mod => match profile {
-                CycleProfile::Generic => 2,
-                CycleProfile::AvrLike => 4,
-                CycleProfile::CortexM0Like => 8,
-            },
+            AstInstruction::Mov => cycle_cost(profile, "instr.mov")?,
+            AstInstruction::Add => cycle_cost(profile, "instr.add")?,
+            AstInstruction::Sub => cycle_cost(profile, "instr.sub")?,
+            AstInstruction::Cmp => cycle_cost(profile, "instr.cmp")?,
+            AstInstruction::Mul => cycle_cost(profile, "instr.mul")?,
+            AstInstruction::Div => cycle_cost(profile, "instr.div")?,
+            AstInstruction::Mod => cycle_cost(profile, "instr.mod")?,
         }),
         _ => Err(CompileError::new(
             "Cycle contract execute block supports only assembly instructions",
@@ -921,7 +1620,7 @@ pub fn render_contract_report_text(reports: &[ContractCompileReport]) -> String 
             "function={} contract=#{} profile={} declared={} measured={} padded_nops={} final={} underflow={:?} overflow={:?}\n",
             report.function_name,
             report.contract_index,
-            report.cycle_profile.as_str(),
+            report.cycle_profile,
             report.declared_cycles,
             report.measured_cycles,
             report.padded_nops,
