@@ -2,10 +2,10 @@
   "name": "h-language-support",
   "displayName": "H Language Support",
   "description": "Syntax highlighting and editor support for the H programming language (.hl)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "crazegi",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.74.0"
   },
   "scripts": {
     "package": "vsce package",
