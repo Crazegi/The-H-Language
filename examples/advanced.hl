@@ -1,0 +1,35 @@
+section .data:
+  engine_name: "Engine_Temp"
+  threshold: 65
+
+section .text:
+  fn calibrate(base, delta):
+    own r9 = base
+    add r9, delta
+    return r9
+
+  fn main():
+    own r1 = 45
+    own r2 = 15
+    add r1, r2
+
+    own r3 = calibrate(r1, 5)
+    ref label = &engine_name
+
+    if r3 >= threshold:
+      print:
+        event: "warning"
+        sensor: label
+        reading: r3
+        status: "high"
+    else:
+      print:
+        event: "diagnostic"
+        sensor: label
+        reading: r3
+        status: "stable"
+
+    while r1 < 70:
+      add r1, 2
+
+    return r1

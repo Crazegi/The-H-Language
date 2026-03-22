@@ -51,3 +51,20 @@ fn rejects_unterminated_string() {
     let err = lexer.tokenize().expect_err("unterminated string must fail");
     assert!(err.message.contains("Unterminated string literal"));
 }
+
+#[test]
+fn lexes_control_flow_operators() {
+    let src = "section .text:\n  fn main():\n    own r1 = 2 + 3 * 4\n    if r1 >= 10:\n      return true\n    else:\n      return false\n";
+    let mut lexer = Lexer::new(src);
+    let tokens = lexer.tokenize().expect("tokenization should succeed");
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+
+    assert!(kinds.contains(&TokenKind::KeywordIf));
+    assert!(kinds.contains(&TokenKind::KeywordElse));
+    assert!(kinds.contains(&TokenKind::KeywordReturn));
+    assert!(kinds.contains(&TokenKind::KeywordTrue));
+    assert!(kinds.contains(&TokenKind::KeywordFalse));
+    assert!(kinds.contains(&TokenKind::Plus));
+    assert!(kinds.contains(&TokenKind::Star));
+    assert!(kinds.contains(&TokenKind::Gte));
+}

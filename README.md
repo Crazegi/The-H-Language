@@ -1,26 +1,54 @@
-# H Lexer (Phase 1)
+# The H Language Prototype
 
-This crate contains a production-ready lexer prototype for the H language (`.hl`) written in Rust.
+This repository now contains a complete end-to-end prototype for H (`.hl`) in Rust:
 
-## Implemented in Phase 1
+- Lexer (indentation-sensitive, YAML-style blocks)
+- AST and recursive descent parser
+- Semantic analyzer (ownership/reference checks + symbol/function checks)
+- Evaluator/runtime
 
-- Indentation-sensitive lexing with `Indent` / `Dedent` / `Newline`
-- Keywords: `section`, `fn`, `own`, `ref`, `print`
-- Assembly mnemonics: `add`, `mov`, `cmp`, `sub`, `mul`, `div`, `jmp`, `jne`, `je`, `call`, `ret`
-- Registers: `r1`, `r2`, ...
-- Literals: decimal numbers and double-quoted strings with escapes
-- YAML-like print block keys tokenized as `YamlKey`
-- Error handling with line/column for illegal characters and malformed input
+## Implemented Language Features
 
-## Quick Start
+- Sections: `section .data:` and `section .text:`
+- Functions with parameters: `fn name(a, b):`
+- Ownership and borrowing:
+	- `own r1 = 45`
+	- `ref alias = &r1`
+- Assembly-flavored instructions:
+	- `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
+- Expressions:
+	- arithmetic: `+ - * / %`
+	- comparisons: `== != < <= > >=`
+	- function calls inside expressions
+- Control flow:
+	- `if/else`
+	- `while`
+	- `return`
+- Structured native print blocks:
+	- `print:` followed by YAML-style key-value lines
+
+## CLI Modes
+
+Token stream:
+
+```powershell
+cargo run --bin hl-lex -- --tokens examples/advanced.hl
+```
+
+AST dump:
+
+```powershell
+cargo run --bin hl-lex -- --ast examples/advanced.hl
+```
+
+Run program:
+
+```powershell
+cargo run --bin hl-lex -- examples/advanced.hl
+```
+
+Run tests:
 
 ```powershell
 cargo test
-cargo run --bin hl-lex
-```
-
-To lex a specific file:
-
-```powershell
-cargo run --bin hl-lex -- examples/sample.hl
 ```

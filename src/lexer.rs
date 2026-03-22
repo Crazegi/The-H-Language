@@ -3,7 +3,9 @@ use std::collections::VecDeque;
 use crate::error::LexerError;
 use crate::token::{Token, TokenKind};
 
-const MNEMONICS: &[&str] = &["add", "mov", "cmp", "sub", "mul", "div", "jmp", "jne", "je", "call", "ret"];
+const MNEMONICS: &[&str] = &[
+    "add", "mov", "cmp", "sub", "mul", "div", "mod", "jmp", "jne", "je", "call", "ret",
+];
 
 #[derive(Debug, Clone)]
 pub struct Lexer {
@@ -122,11 +124,35 @@ impl Lexer {
                     self.advance();
                     tok
                 }
-                '=' => {
-                    let tok = Token::new(TokenKind::Assign, "=", self.line, self.column);
+                '=' => self.scan_equal_like(),
+                '!' => self.scan_bang_like()?,
+                '+' => {
+                    let tok = Token::new(TokenKind::Plus, "+", self.line, self.column);
                     self.advance();
                     tok
                 }
+                '-' => {
+                    let tok = Token::new(TokenKind::Minus, "-", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                '*' => {
+                    let tok = Token::new(TokenKind::Star, "*", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                '/' => {
+                    let tok = Token::new(TokenKind::Slash, "/", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                '%' => {
+                    let tok = Token::new(TokenKind::Percent, "%", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                '<' => self.scan_lt_like(),
+                '>' => self.scan_gt_like(),
                 '&' => {
                     let tok = Token::new(TokenKind::Ampersand, "&", self.line, self.column);
                     self.advance();
@@ -267,6 +293,12 @@ impl Lexer {
             "own" => TokenKind::KeywordOwn,
             "ref" => TokenKind::KeywordRef,
             "print" => TokenKind::KeywordPrint,
+            "if" => TokenKind::KeywordIf,
+            "else" => TokenKind::KeywordElse,
+            "while" => TokenKind::KeywordWhile,
+            "return" => TokenKind::KeywordReturn,
+            "true" => TokenKind::KeywordTrue,
+            "false" => TokenKind::KeywordFalse,
             _ if is_register(&s) => TokenKind::Register,
             _ if MNEMONICS.contains(&lower.as_str()) => TokenKind::Mnemonic,
             _ => TokenKind::Identifier,
@@ -372,6 +404,58 @@ impl Lexer {
                 break;
             }
             self.advance();
+        }
+    }
+
+    fn scan_equal_like(&mut self) -> Token {
+        let line = self.line;
+        let col = self.column;
+        self.advance();
+        if self.current() == Some('=') {
+            self.advance();
+            Token::new(TokenKind::EqEq, "==", line, col)
+        } else {
+            Token::new(TokenKind::Assign, "=", line, col)
+        }
+    }
+
+    fn scan_bang_like(&mut self) -> Result<Token, LexerError> {
+        let line = self.line;
+        let col = self.column;
+        self.advance();
+        if self.current() == Some('=') {
+            self.advance();
+            Ok(Token::new(TokenKind::NotEq, "!=", line, col))
+        } else {
+            Err(LexerError::new(
+                line,
+                col,
+                "Unexpected '!' (did you mean '!=')",
+            ))
+        }
+    }
+
+    fn scan_lt_like(&mut self) -> Token {
+        let line = self.line;
+        let col = self.column;
+        self.advance();
+        if self.current() == Some('=') {
+            self.advance();
+            Token::new(TokenKind::Lte, "<=", line, col)
+        } else {
+            Token::new(TokenKind::Lt, "<", line, col)
+        }
+    }
+
+    fn scan_gt_like(&mut self) -> Token {
+        let line = self.line;
+        let col = self.column;
+        self.advance();
+        if self.current() == Some('=') {
+            self.advance();
+            Token::new(TokenKind::Gte, ">=", line, col)
+        } else {
+            Token::new(TokenKind::Gt, ">", line, col)
         }
     }
 
