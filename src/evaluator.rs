@@ -118,12 +118,12 @@ impl Runtime {
 
     fn execute_stmt(&self, stmt: &Stmt, frame: &mut Frame) -> Result<Flow, RuntimeError> {
         match stmt {
-            Stmt::OwnDecl { name, expr } => {
+            Stmt::OwnDecl { name, expr, .. } => {
                 let value = self.eval_expr(expr, frame)?;
                 frame.vars.insert(name.clone(), value);
                 Ok(Flow::Continue)
             }
-            Stmt::RefDecl { name, target } => {
+            Stmt::RefDecl { name, target, .. } => {
                 if !is_memory_target(target)
                     && !frame.vars.contains_key(target)
                     && !self.globals.contains_key(target)
@@ -145,12 +145,14 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, .. } => {
                 let value = self.eval_expr(expr, frame)?;
                 self.assign(frame, name, value)?;
                 Ok(Flow::Continue)
             }
-            Stmt::Instruction { op, target, rhs } => {
+            Stmt::Instruction {
+                op, target, rhs, ..
+            } => {
                 let rhs_val = self.eval_expr(rhs, frame)?;
                 self.execute_instruction(frame, *op, target, rhs_val)?;
                 Ok(Flow::Continue)
@@ -159,6 +161,7 @@ impl Runtime {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => {
                 if self.eval_expr(condition, frame)?.as_bool()? {
                     for stmt in then_body {
@@ -175,7 +178,9 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::While { condition, body } => {
+            Stmt::While {
+                condition, body, ..
+            } => {
                 while self.eval_expr(condition, frame)?.as_bool()? {
                     for stmt in body {
                         if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
@@ -185,12 +190,41 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::Repeat { times, body } => {
+            Stmt::Repeat { times, body, .. } => {
                 let times = self.eval_expr(times, frame)?.as_int()?;
                 if times < 0 {
                     return Err(RuntimeError::new("repeat expects non-negative count"));
                 }
                 for _ in 0..times {
+                    for stmt in body {
+                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
+                            return Ok(Flow::Return(v));
+                        }
+                    }
+                }
+                Ok(Flow::Continue)
+            }
+            Stmt::For {
+                name,
+                iterable,
+                body,
+                ..
+            } => {
+                let iterable_value = self.eval_expr(iterable, frame)?;
+                let len_value = builtin::call_builtin("iter_len", &[iterable_value.clone()])
+                    .map_err(RuntimeError::new)?
+                    .ok_or_else(|| RuntimeError::new("iter_len did not return a value"))?;
+                let len = len_value.as_int()?;
+
+                frame.vars.insert(name.clone(), Value::Maybe);
+                for i in 0..len {
+                    let item = builtin::call_builtin(
+                        "iter_get",
+                        &[iterable_value.clone(), Value::Int(i)],
+                    )
+                    .map_err(RuntimeError::new)?
+                    .ok_or_else(|| RuntimeError::new("iter_get did not return a value"))?;
+                    frame.vars.insert(name.clone(), item);
                     for stmt in body {
                         if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
                             return Ok(Flow::Return(v));
@@ -207,7 +241,7 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::PrintBlock(fields) => {
+            Stmt::PrintBlock { fields, .. } => {
                 println!("print:");
                 for (key, expr) in fields {
                     let value = self.eval_expr(expr, frame)?;
@@ -215,14 +249,14 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
-            Stmt::Return(expr) => {
+            Stmt::Return { expr, .. } => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e, frame)?,
                     None => Value::Unit,
                 };
                 Ok(Flow::Return(value))
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr { expr, .. } => {
                 let _ = self.eval_expr(expr, frame)?;
                 Ok(Flow::Continue)
             }
@@ -284,24 +318,26 @@ impl Runtime {
 
     fn eval_expr(&self, expr: &Expr, frame: &Frame) -> Result<Value, RuntimeError> {
         match expr {
-            Expr::Number(v) => Ok(Value::Int(*v)),
-            Expr::String(s) => Ok(Value::Str(s.clone())),
-            Expr::Bool(b) => Ok(Value::Bool(*b)),
-            Expr::Maybe => Ok(Value::Maybe),
-            Expr::Var(name) => self.resolve_name(frame, name),
-            Expr::Unary { op, rhs } => {
+            Expr::Number(v, _) => Ok(Value::Int(*v)),
+            Expr::String(s, _) => Ok(Value::Str(s.clone())),
+            Expr::Bool(b, _) => Ok(Value::Bool(*b)),
+            Expr::Maybe(_) => Ok(Value::Maybe),
+            Expr::Var(name, _) => self.resolve_name(frame, name),
+            Expr::Unary { op, rhs, .. } => {
                 let value = self.eval_expr(rhs, frame)?;
                 match op {
                     UnaryOp::Neg => Ok(Value::Int(-value.as_int()?)),
                     UnaryOp::Not => logic_not(value),
                 }
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary {
+                left, op, right, ..
+            } => {
                 let l = self.eval_expr(left, frame)?;
                 let r = self.eval_expr(right, frame)?;
                 eval_binary(l, *op, r)
             }
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 let mut evaluated = Vec::with_capacity(args.len());
                 for a in args {
                     evaluated.push(self.eval_expr(a, frame)?);
@@ -363,10 +399,10 @@ enum Flow {
 
 fn eval_const_expr(expr: &Expr) -> Result<Value, RuntimeError> {
     match expr {
-        Expr::Number(v) => Ok(Value::Int(*v)),
-        Expr::String(v) => Ok(Value::Str(v.clone())),
-        Expr::Bool(v) => Ok(Value::Bool(*v)),
-        Expr::Maybe => Ok(Value::Maybe),
+        Expr::Number(v, _) => Ok(Value::Int(*v)),
+        Expr::String(v, _) => Ok(Value::Str(v.clone())),
+        Expr::Bool(v, _) => Ok(Value::Bool(*v)),
+        Expr::Maybe(_) => Ok(Value::Maybe),
         _ => Err(RuntimeError::new(
             "Data section currently supports only scalar literals",
         )),

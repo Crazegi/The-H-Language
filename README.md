@@ -55,7 +55,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - integer math: `gcd`, `lcm`, `is_prime`, `next_pow2`
   - bit math: `popcount`, `leading_zeros`, `trailing_zeros`, `bit_reverse`
   - collections (string-encoded): `array_new`, `array_len`, `array_push`, `array_get`, `queue_new`, `queue_len`, `queue_push`, `queue_peek`, `queue_pop`, `ring_new`, `ring_len`, `ring_push`, `ring_peek`
-  - string: `len`, `upper`, `lower`, `contains`, `split`, `join`
+  - string: `len`, `upper`, `lower`, `contains`, `split`, `join`, `format`
   - logic: `phase`, `collapse`
   - hardware: `sleep_until(interrupt)`
   - embedded/hardware scaffold:
@@ -70,14 +70,14 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
     - input: `input(prompt)`
     - file I/O: `read_text`, `write_text`, `append_text`, `exists`, `delete_file`
     - time/random: `sleep_ms`, `now_ms`, `rand_int`
-    - utilities: `env`, `to_int`, `to_bool`, `to_float`, `to_string`, `to_float_string`, `trim`, `replace`
+    - utilities: `env`, `to_int`, `to_bool`, `to_float`, `to_string`, `to_float_string`, `trim`, `replace`, `format`
     - starter API scaffold: `window_loop`, `menu`, `http_get`, `json_parse`
   - scripting library:
     - process args: `script_args_count`, `script_arg`
     - working directory/path: `script_cwd`, `script_chdir`, `script_path_join`, `script_dirname`, `script_basename`
     - shell integration: `script_run`, `script_run_capture`
   - namespaced call style is supported with imports, e.g. `math.atan2(y, x)`, `gpio.claim("[port_a]")`
-- Control flow: `if/else`, `while`, `repeat`, `return`
+- Control flow: `if/else`, `while`, `repeat`, `for`, `return`
 - Structured output: YAML-style `print:` blocks
 
 ### Stdlib Namespaces (Import System)

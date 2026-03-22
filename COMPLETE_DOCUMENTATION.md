@@ -251,4 +251,3 @@ Appendix: Notable Functions / Files (Quick Index)
 - `run_bytecode` — VM execution entry in [src/vm.rs](src/vm.rs).
 - `write_package` / `read_package` — packaging functions in [src/package.rs](src/package.rs).
 
-If you want a function-by-function docstring expansion (every public function fully documented), I can generate that next, producing either inline doc comments in each file or a separate reference manual. Which would you prefer?

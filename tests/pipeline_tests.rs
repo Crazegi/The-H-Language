@@ -1,4 +1,4 @@
-use hl_lexer::{analyze, parse_source, run_program};
+use hl_lexer::{analyze, analyze_with_warnings, parse_source, run_program};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unique_temp_path(file_name: &str) -> std::path::PathBuf {
@@ -107,6 +107,66 @@ section .text:
     analyze(&program).expect("semantic analysis should pass");
     let result = run_program(&program).expect("runtime should pass");
     assert_eq!(result.render(), "6");
+}
+
+#[test]
+fn parses_and_runs_for_loop_without_unused_index_warning() {
+    let src = r#"section .text:
+  fn main():
+    own sum = 0
+    for i in 5:
+      add sum, i
+    return sum
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let warnings = analyze_with_warnings(&program).expect("semantic analysis should pass");
+    assert!(!warnings
+        .iter()
+        .any(|w| w.message.contains("Variable `i` declared but never used")));
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "10");
+}
+
+#[test]
+fn parses_and_runs_for_loop_over_array_items() {
+    let src = r#"section .text:
+  fn main():
+    own arr = array_new()
+    arr = array_push(arr, "a")
+    arr = array_push(arr, "b")
+    arr = array_push(arr, "c")
+
+    own total = 0
+    for item in arr:
+      own n = len(item)
+      add total, n
+    return total
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "3");
+}
+
+#[test]
+fn parses_and_runs_format_builtin() {
+    let src = r#"section .text:
+  fn main():
+    own name = "port_a"
+    own reading = 42
+    own status = "HIGH"
+    own msg = format("sensor={} reading={} status={}", name, reading, status)
+    if msg == "sensor=port_a reading=42 status=HIGH":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
 }
 
 #[test]
@@ -283,6 +343,59 @@ fn semantic_rejects_namespaced_builtin_without_import() {
     let program = parse_source(src).expect("parse should pass");
     let err = analyze(&program).expect_err("missing import should fail semantic analysis");
     assert!(err.message.contains("not imported"));
+}
+
+#[test]
+fn semantic_errors_include_line_column_and_caret_snippet() {
+    let src = r#"section .text:
+  fn main():
+    own value = math.snap(15, 8)
+    return value
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("missing import should fail semantic analysis");
+    let rendered = err.to_string();
+
+    assert_eq!(err.line, 3);
+    assert_eq!(err.column, 17);
+    assert!(rendered.contains("at 3:17"));
+    assert!(rendered.contains("own value = math.snap(15, 8)"));
+    assert!(rendered.contains("^"));
+}
+
+#[test]
+fn semantic_rejects_format_placeholder_arg_mismatch() {
+    let src = r#"section .text:
+  fn main():
+    own x = format("a={} b={}", 1)
+    return x
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("format placeholder mismatch should fail semantic analysis");
+    assert!(err.message.contains("placeholder"));
+}
+
+#[test]
+fn semantic_warnings_report_unused_symbols_and_ports_with_locations() {
+    let src = r#"section .text:
+  fn main():
+    own temp = 42
+    own [port_a]
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let warnings = analyze_with_warnings(&program).expect("semantic analysis should pass");
+
+    assert!(warnings
+        .iter()
+        .any(|w| w.message.contains("Variable `temp` declared but never used") && w.line == 3));
+    assert!(warnings
+        .iter()
+        .any(|w| w.message.contains("Hardware port `port_a` is owned but never written to") && w.line == 4));
+    assert!(warnings.iter().all(|w| w.to_string().contains("warning:")));
 }
 
 #[test]

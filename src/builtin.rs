@@ -66,6 +66,9 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "to_float_string" => Some(1),
         "trim" => Some(1),
         "replace" => Some(3),
+        "format" => Some(1),
+        "iter_len" => Some(1),
+        "iter_get" => Some(2),
         "array_new" => Some(0),
         "array_len" => Some(1),
         "array_push" => Some(2),
@@ -143,6 +146,18 @@ pub fn normalize_builtin_name(name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+pub fn builtin_accepts_arity(name: &str, arg_count: usize) -> bool {
+    let resolved = namespaced_to_builtin(name).unwrap_or(name);
+    match resolved {
+        "format" => arg_count >= 1,
+        _ => builtin_arity(resolved) == Some(arg_count),
+    }
+}
+
+pub fn count_format_placeholders(template: &str) -> usize {
+    template.matches("{}").count()
 }
 
 pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {
@@ -490,6 +505,92 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             let from = str_arg(args, 1)?;
             let to = str_arg(args, 2)?;
             Value::Str(source.replace(from, to))
+        }
+        "format" => {
+            let template = str_arg(args, 0)?;
+            let placeholders = count_format_placeholders(template);
+            let provided = args.len().saturating_sub(1);
+            if placeholders != provided {
+                return Err(format!(
+                    "format expects {} value(s) for template placeholders, got {}",
+                    placeholders, provided
+                ));
+            }
+
+            let mut rendered = String::new();
+            let mut rest = template;
+            for value in &args[1..] {
+                if let Some(pos) = rest.find("{}") {
+                    rendered.push_str(&rest[..pos]);
+                    rendered.push_str(&value_to_string(value));
+                    rest = &rest[pos + 2..];
+                }
+            }
+            rendered.push_str(rest);
+            Value::Str(rendered)
+        }
+        "iter_len" => {
+            let iterable = args
+                .get(0)
+                .ok_or_else(|| "Missing argument".to_string())?;
+            match iterable {
+                Value::Int(v) => {
+                    if *v < 0 {
+                        return Err("iter_len expects non-negative integer range".to_string());
+                    }
+                    Value::Int(*v)
+                }
+                Value::Str(raw) => {
+                    if let Ok((_, items)) = parse_ring(raw) {
+                        Value::Int(items.len() as i64)
+                    } else {
+                        Value::Int(sequence_items(raw).len() as i64)
+                    }
+                }
+                _ => {
+                    return Err(
+                        "iter_len expects integer range or string-backed collection".to_string(),
+                    )
+                }
+            }
+        }
+        "iter_get" => {
+            let iterable = args
+                .get(0)
+                .ok_or_else(|| "Missing argument".to_string())?;
+            let idx = int_arg(args, 1)?;
+            if idx < 0 {
+                return Err("iter_get expects non-negative index".to_string());
+            }
+
+            match iterable {
+                Value::Int(v) => {
+                    if *v < 0 {
+                        return Err("iter_get expects non-negative integer range".to_string());
+                    }
+                    if idx >= *v {
+                        Value::Maybe
+                    } else {
+                        Value::Int(idx)
+                    }
+                }
+                Value::Str(raw) => {
+                    let items = if let Ok((_, items)) = parse_ring(raw) {
+                        items
+                    } else {
+                        sequence_items(raw)
+                    };
+                    match items.get(idx as usize) {
+                        Some(v) => Value::Str(v.clone()),
+                        None => Value::Maybe,
+                    }
+                }
+                _ => {
+                    return Err(
+                        "iter_get expects integer range or string-backed collection".to_string(),
+                    )
+                }
+            }
         }
         "array_new" => Value::Str(String::new()),
         "array_len" => Value::Int(sequence_items(str_arg(args, 0)?).len() as i64),
@@ -870,6 +971,7 @@ fn namespaced_to_builtin(name: &str) -> Option<&'static str> {
         ("string", "join") => Some("join"),
         ("string", "trim") => Some("trim"),
         ("string", "replace") => Some("replace"),
+        ("string", "format") => Some("format"),
         ("collections", "array_new") => Some("array_new"),
         ("collections", "array_len") => Some("array_len"),
         ("collections", "array_push") => Some("array_push"),

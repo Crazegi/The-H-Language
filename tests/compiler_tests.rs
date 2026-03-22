@@ -88,6 +88,65 @@ section .text:
 }
 
 #[test]
+fn vm_executes_for_loops() {
+    let src = r#"section .text:
+  fn main():
+    own acc = 0
+    for i in 4:
+      add acc, i
+    return acc
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "6");
+}
+
+#[test]
+fn vm_executes_for_loops_over_array_items() {
+    let src = r#"section .text:
+  fn main():
+    own arr = array_new()
+    arr = array_push(arr, "x")
+    arr = array_push(arr, "y")
+    arr = array_push(arr, "z")
+
+    own total = 0
+    for item in arr:
+      own n = len(item)
+      add total, n
+    return total
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "3");
+}
+
+#[test]
+fn vm_executes_format_builtin() {
+    let src = r#"section .text:
+  fn main():
+    own sensor = "port_b"
+    own reading = 7
+    own msg = format("sensor={} reading={}", sensor, reading)
+    if msg == "sensor=port_b reading=7":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn vm_executes_bitwise_and_sleep_until_builtin() {
     let src = r#"section .text:
   fn main():
@@ -409,6 +468,12 @@ fn cycle_contract_overflow_reports_compile_error() {
     analyze(&program).expect("semantic pass should pass");
     let err = compile_program(&program).expect_err("compile should fail on overflow");
     assert!(err.message.contains("Cycle contract overflow"));
+    assert_eq!(err.line, 10);
+    assert_eq!(err.column, 5);
+    let rendered = err.to_string();
+    assert!(rendered.contains("at 10:5"));
+    assert!(rendered.contains("execute:"));
+    assert!(rendered.contains("^"));
 }
 
 #[test]

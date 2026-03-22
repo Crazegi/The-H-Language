@@ -43,6 +43,7 @@ impl From<LexerError> for ParseError {
 }
 
 pub struct Parser {
+    source: String,
     tokens: Vec<Token>,
     pos: usize,
 }
@@ -51,12 +52,17 @@ impl Parser {
     pub fn from_source(source: &str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize()?;
-        Ok(Self { tokens, pos: 0 })
+        Ok(Self {
+            source: source.to_string(),
+            tokens,
+            pos: 0,
+        })
     }
 
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut data = BTreeMap::new();
         let mut imports = Vec::new();
+        let mut import_spans = Vec::new();
         let mut functions = Vec::new();
 
         self.skip_newlines();
@@ -89,7 +95,9 @@ impl Parser {
                             break;
                         }
                         if self.match_kind(TokenKind::KeywordImport) {
-                            imports.push(self.parse_import_stmt()?);
+                            let (module, span) = self.parse_import_stmt()?;
+                            imports.push(module);
+                            import_spans.push(span);
                         } else {
                             functions.push(self.parse_function()?);
                         }
@@ -110,21 +118,25 @@ impl Parser {
         Ok(Program {
             data,
             imports,
+            import_spans,
             functions,
+            source: self.source.clone(),
         })
     }
 
-    fn parse_import_stmt(&mut self) -> Result<String, ParseError> {
+    fn parse_import_stmt(&mut self) -> Result<(String, crate::token::Span), ParseError> {
+        let span = self.previous().span;
         let module = self
             .expect_identifier_like("Expected module name after `import`")?
             .lexeme;
         self.consume_stmt_terminator();
-        Ok(module)
+        Ok((module, span))
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {
         let is_interrupt = self.match_kind(TokenKind::KeywordInterrupt);
         self.expect(TokenKind::KeywordFn, "Expected `fn`")?;
+        let fn_tok = self.previous().clone();
         let name = self.expect_identifier_like("Expected function name")?.lexeme;
         self.expect(TokenKind::LParen, "Expected `(` after function name")?;
 
@@ -143,6 +155,7 @@ impl Parser {
         let body = self.parse_block("function body")?;
         Ok(Function {
             name,
+            span: fn_tok.span,
             is_interrupt,
             params,
             body,
@@ -150,42 +163,49 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
-        if self.match_kind(TokenKind::KeywordInt)
-            || self.match_kind(TokenKind::KeywordString)
-            || self.match_kind(TokenKind::KeywordBool)
+        if self.check(TokenKind::KeywordInt)
+            || self.check(TokenKind::KeywordString)
+            || self.check(TokenKind::KeywordBool)
         {
+            let decl_tok = self.advance().clone();
             let name = self.expect_identifier_like("Expected identifier after type")?.lexeme;
             self.expect(TokenKind::Assign, "Expected `=` in typed declaration")?;
             let expr = self.parse_expression()?;
             self.consume_stmt_terminator();
-            return Ok(Stmt::OwnDecl { name, expr });
+            return Ok(Stmt::OwnDecl {
+                name,
+                expr,
+                span: decl_tok.span,
+            });
         }
 
         if self.match_kind(TokenKind::KeywordOwn) {
+            let span = self.previous().span;
             if self.match_kind(TokenKind::LBracket) {
                 let port = self
                     .expect_identifier_like("Expected port identifier after `own [`")?
                     .lexeme;
                 self.expect(TokenKind::RBracket, "Expected `]` after port identifier")?;
                 self.consume_stmt_terminator();
-                return Ok(Stmt::PortOwn { port });
+                return Ok(Stmt::PortOwn { port, span });
             }
 
             let name = self.expect_identifier_like("Expected identifier after `own`")?.lexeme;
             self.expect(TokenKind::Assign, "Expected `=` in own declaration")?;
             let expr = self.parse_expression()?;
             self.consume_stmt_terminator();
-            return Ok(Stmt::OwnDecl { name, expr });
+            return Ok(Stmt::OwnDecl { name, expr, span });
         }
 
         if self.match_kind(TokenKind::KeywordRef) {
+            let span = self.previous().span;
             if self.match_kind(TokenKind::LBracket) {
                 let port = self
                     .expect_identifier_like("Expected port identifier after `ref [`")?
                     .lexeme;
                 self.expect(TokenKind::RBracket, "Expected `]` after port identifier")?;
                 self.consume_stmt_terminator();
-                return Ok(Stmt::PortRef { port });
+                return Ok(Stmt::PortRef { port, span });
             }
 
             let name = self.expect_identifier_like("Expected identifier after `ref`")?.lexeme;
@@ -201,10 +221,11 @@ impl Parser {
                 self.expect_identifier_like("Expected referenced identifier")?.lexeme
             };
             self.consume_stmt_terminator();
-            return Ok(Stmt::RefDecl { name, target });
+            return Ok(Stmt::RefDecl { name, target, span });
         }
 
         if self.match_kind(TokenKind::KeywordIf) {
+            let span = self.previous().span;
             let condition = self.parse_expression()?;
             let then_body = self.parse_block("if body")?;
             self.skip_newlines();
@@ -218,22 +239,46 @@ impl Parser {
                 condition,
                 then_body,
                 else_body,
+                span,
             });
         }
 
         if self.match_kind(TokenKind::KeywordWhile) {
+            let span = self.previous().span;
             let condition = self.parse_expression()?;
             let body = self.parse_block("while body")?;
-            return Ok(Stmt::While { condition, body });
+            return Ok(Stmt::While {
+                condition,
+                body,
+                span,
+            });
         }
 
         if self.match_kind(TokenKind::KeywordRepeat) {
+            let span = self.previous().span;
             let times = self.parse_expression()?;
             let body = self.parse_block("repeat body")?;
-            return Ok(Stmt::Repeat { times, body });
+            return Ok(Stmt::Repeat { times, body, span });
+        }
+
+        if self.match_kind(TokenKind::KeywordFor) {
+            let span = self.previous().span;
+            let name = self
+                .expect_identifier_like("Expected loop variable after `for`")?
+                .lexeme;
+            self.expect(TokenKind::KeywordIn, "Expected `in` in for loop")?;
+            let iterable = self.parse_expression()?;
+            let body = self.parse_block("for body")?;
+            return Ok(Stmt::For {
+                name,
+                iterable,
+                body,
+                span,
+            });
         }
 
         if self.match_kind(TokenKind::KeywordYield) {
+            let span = self.previous().span;
             self.expect(TokenKind::LBracket, "Expected `[` after `yield`")?;
             let port = self
                 .expect_identifier_like("Expected hardware port after `yield [`")?
@@ -248,6 +293,7 @@ impl Parser {
                 port,
                 handler,
                 body,
+                span,
             });
         }
 
@@ -258,11 +304,13 @@ impl Parser {
                 TokenKind::KeywordExecute,
                 "Expected `execute` block after `contract`",
             )?;
+            let span = self.previous().span;
             let body = self.parse_block("contract execute body")?;
-            return Ok(Stmt::CycleContract { spec, body });
+            return Ok(Stmt::CycleContract { spec, body, span });
         }
 
         if self.match_kind(TokenKind::KeywordPrint) {
+            let span = self.previous().span;
             self.expect(TokenKind::Colon, "Expected `:` after `print`")?;
             self.expect(TokenKind::Newline, "Expected newline after `print:`")?;
             self.expect(TokenKind::Indent, "Expected indented print block")?;
@@ -282,17 +330,21 @@ impl Parser {
                 fields.push((key_tok.lexeme, expr));
             }
             self.expect(TokenKind::Dedent, "Expected end of print block")?;
-            return Ok(Stmt::PrintBlock(fields));
+            return Ok(Stmt::PrintBlock { fields, span });
         }
 
         if self.match_kind(TokenKind::KeywordReturn) {
+            let span = self.previous().span;
             if self.check(TokenKind::Newline) {
                 self.advance();
-                return Ok(Stmt::Return(None));
+                return Ok(Stmt::Return { expr: None, span });
             }
             let expr = self.parse_expression()?;
             self.consume_stmt_terminator();
-            return Ok(Stmt::Return(Some(expr)));
+            return Ok(Stmt::Return {
+                expr: Some(expr),
+                span,
+            });
         }
 
         if self.check(TokenKind::Mnemonic) {
@@ -316,11 +368,18 @@ impl Parser {
             self.expect(TokenKind::Comma, "Expected `,` after instruction target")?;
             let rhs = self.parse_expression()?;
             self.consume_stmt_terminator();
-            return Ok(Stmt::Instruction { op, target, rhs });
+            return Ok(Stmt::Instruction {
+                op,
+                target,
+                rhs,
+                span: op_tok.span,
+            });
         }
 
         if self.check(TokenKind::Identifier) || self.check(TokenKind::Register) {
-            let name = self.advance().lexeme.clone();
+            let start_tok = self.advance().clone();
+            let name = start_tok.lexeme;
+            let start_span = start_tok.span;
             let qualified = self.parse_qualified_name(name)?;
             if self.match_kind(TokenKind::Assign) {
                 if qualified.contains('.') {
@@ -334,15 +393,22 @@ impl Parser {
                 return Ok(Stmt::Assign {
                     name: qualified,
                     expr,
+                    span: start_span,
                 });
             }
             if self.match_kind(TokenKind::LParen) {
                 let args = self.parse_call_args()?;
                 self.consume_stmt_terminator();
-                return Ok(Stmt::Expr(Expr::Call {
+                let call_expr = Expr::Call {
                     name: qualified,
                     args,
-                }));
+                    span: start_span,
+                };
+                let span = call_expr.span();
+                return Ok(Stmt::Expr {
+                    expr: call_expr,
+                    span,
+                });
             }
             if qualified.contains('.') {
                 return Err(ParseError::new(
@@ -358,7 +424,8 @@ impl Parser {
 
         let expr = self.parse_expression()?;
         self.consume_stmt_terminator();
-        Ok(Stmt::Expr(expr))
+        let span = expr.span();
+        Ok(Stmt::Expr { expr, span })
     }
 
     fn parse_block(&mut self, context: &str) -> Result<Vec<Stmt>, ParseError> {
@@ -405,10 +472,12 @@ impl Parser {
         let mut expr = self.parse_xor()?;
         while self.match_kind(TokenKind::KeywordOr) {
             let right = self.parse_xor()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::Or,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -418,10 +487,12 @@ impl Parser {
         let mut expr = self.parse_and()?;
         while self.match_kind(TokenKind::KeywordXor) {
             let right = self.parse_and()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::Xor,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -431,10 +502,12 @@ impl Parser {
         let mut expr = self.parse_bit_or()?;
         while self.match_kind(TokenKind::KeywordAnd) {
             let right = self.parse_bit_or()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::And,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -444,10 +517,12 @@ impl Parser {
         let mut expr = self.parse_bit_and()?;
         while self.match_kind(TokenKind::Pipe) {
             let right = self.parse_bit_and()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::BitOr,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -457,10 +532,12 @@ impl Parser {
         let mut expr = self.parse_equality()?;
         while self.match_kind(TokenKind::Ampersand) {
             let right = self.parse_equality()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::BitAnd,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -480,10 +557,12 @@ impl Parser {
                 break;
             };
             let right = self.parse_comparison()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -507,10 +586,12 @@ impl Parser {
                 break;
             };
             let right = self.parse_shift()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -532,10 +613,12 @@ impl Parser {
             };
 
             let right = self.parse_term()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -555,10 +638,12 @@ impl Parser {
                 break;
             };
             let right = self.parse_factor()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -580,10 +665,12 @@ impl Parser {
                 break;
             };
             let right = self.parse_unary()?;
+            let span = expr.span();
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op,
                 right: Box::new(right),
+                span,
             };
         }
         Ok(expr)
@@ -591,18 +678,22 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         if self.match_kind(TokenKind::KeywordNot) {
+            let span = self.previous().span;
             let rhs = self.parse_unary()?;
             return Ok(Expr::Unary {
                 op: UnaryOp::Not,
                 rhs: Box::new(rhs),
+                span,
             });
         }
 
         if self.match_kind(TokenKind::Minus) {
+            let span = self.previous().span;
             let rhs = self.parse_unary()?;
             return Ok(Expr::Unary {
                 op: UnaryOp::Neg,
                 rhs: Box::new(rhs),
+                span,
             });
         }
         self.parse_primary()
@@ -614,24 +705,28 @@ impl Parser {
             TokenKind::Number => {
                 let value = parse_int_literal(&tok.lexeme)
                     .ok_or_else(|| ParseError::new(&tok, "Invalid integer literal"))?;
-                Ok(Expr::Number(value))
+                Ok(Expr::Number(value, tok.span))
             }
-            TokenKind::String => Ok(Expr::String(tok.lexeme)),
-            TokenKind::KeywordTrue => Ok(Expr::Bool(true)),
-            TokenKind::KeywordFalse => Ok(Expr::Bool(false)),
-            TokenKind::KeywordMaybe => Ok(Expr::Maybe),
+            TokenKind::String => Ok(Expr::String(tok.lexeme, tok.span)),
+            TokenKind::KeywordTrue => Ok(Expr::Bool(true, tok.span)),
+            TokenKind::KeywordFalse => Ok(Expr::Bool(false, tok.span)),
+            TokenKind::KeywordMaybe => Ok(Expr::Maybe(tok.span)),
             TokenKind::Identifier | TokenKind::Register => {
                 let name = self.parse_qualified_name(tok.lexeme)?;
                 if self.match_kind(TokenKind::LParen) {
                     let args = self.parse_call_args()?;
-                    Ok(Expr::Call { name, args })
+                    Ok(Expr::Call {
+                        name,
+                        args,
+                        span: tok.span,
+                    })
                 } else if name.contains('.') {
                     Err(ParseError::new(
                         self.peek(),
                         "Qualified names must be used as function calls",
                     ))
                 } else {
-                    Ok(Expr::Var(name))
+                    Ok(Expr::Var(name, tok.span))
                 }
             }
             TokenKind::LParen => {
@@ -711,7 +806,7 @@ impl Parser {
             match key.as_str() {
                 "cycles" => {
                     let expr = self.parse_expression()?;
-                    let Expr::Number(value) = expr else {
+                    let Expr::Number(value, _) = expr else {
                         return Err(ParseError::new(
                             self.peek(),
                             "Contract `cycles` must be an integer literal",
@@ -735,7 +830,7 @@ impl Parser {
                 }
                 "energy_nj" => {
                     let expr = self.parse_expression()?;
-                    let Expr::Number(value) = expr else {
+                    let Expr::Number(value, _) = expr else {
                         return Err(ParseError::new(
                             self.peek(),
                             "Contract `energy_nj` must be an integer literal",
@@ -840,6 +935,12 @@ impl Parser {
                 .last()
                 .expect("token stream should always contain EOF")
         })
+    }
+
+    fn previous(&self) -> &Token {
+        self.tokens
+            .get(self.pos.saturating_sub(1))
+            .unwrap_or_else(|| self.tokens.first().expect("token stream should not be empty"))
     }
 
     fn advance(&mut self) -> &Token {

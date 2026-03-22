@@ -31,6 +31,6 @@ pub use native::{
 };
 pub use package::{read_package, write_package, PackageError};
 pub use parser::{parse_source, ParseError, Parser};
-pub use semantic::{analyze, SemanticError};
+pub use semantic::{analyze, analyze_with_warnings, SemanticError, SemanticWarning};
 pub use token::{Span, Token, TokenKind};
 pub use vm::{run_bytecode, VmError};

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Parser, ValueEnum};
 use hl_lexer::{
-    analyze, compile_h_to_native_artifacts_with_options, compile_program_with_options,
+    analyze_with_warnings, compile_h_to_native_artifacts_with_options, compile_program_with_options,
     diagnose_cycle_profile_coverage, disassemble, load_cycle_profiles_from_file, parse_source,
     read_package, render_contract_report_text, render_profile_doctor_report_text, run_bytecode,
     run_program, write_package, CompileOptions, CycleProfile, Lexer, OptimizationLevel, TokenKind,
@@ -305,9 +305,16 @@ fn main() {
                 }
             };
 
-            if let Err(err) = analyze(&program) {
-                eprintln!("Semantic error: {}", err);
-                std::process::exit(1);
+            match analyze_with_warnings(&program) {
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("{}", warning);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Semantic error: {}", err);
+                    std::process::exit(1);
+                }
             }
 
             let compiled = match compile_program_with_options(&program, compile_options.clone()) {
@@ -348,9 +355,16 @@ fn main() {
                 }
             };
 
-            if let Err(err) = analyze(&program) {
-                eprintln!("Semantic error: {}", err);
-                std::process::exit(1);
+            match analyze_with_warnings(&program) {
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("{}", warning);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Semantic error: {}", err);
+                    std::process::exit(1);
+                }
             }
 
             let report = diagnose_cycle_profile_coverage(&program, &compile_options);
@@ -375,9 +389,16 @@ fn main() {
                 }
             };
 
-            if let Err(err) = analyze(&program) {
-                eprintln!("Semantic error: {}", err);
-                std::process::exit(1);
+            match analyze_with_warnings(&program) {
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("{}", warning);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Semantic error: {}", err);
+                    std::process::exit(1);
+                }
             }
 
             let compiled = match compile_program_with_options(&program, compile_options.clone()) {
@@ -456,9 +477,16 @@ fn main() {
                 }
             };
 
-            if let Err(err) = analyze(&program) {
-                eprintln!("Semantic error: {}", err);
-                std::process::exit(1);
+            match analyze_with_warnings(&program) {
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("{}", warning);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Semantic error: {}", err);
+                    std::process::exit(1);
+                }
             }
 
             let compiled = match compile_program_with_options(&program, compile_options.clone()) {
@@ -496,9 +524,16 @@ fn main() {
                 }
             };
 
-            if let Err(err) = analyze(&program) {
-                eprintln!("Semantic error: {}", err);
-                std::process::exit(1);
+            match analyze_with_warnings(&program) {
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("{}", warning);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Semantic error: {}", err);
+                    std::process::exit(1);
+                }
             }
 
             match run_program(&program) {

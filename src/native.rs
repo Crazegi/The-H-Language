@@ -5,7 +5,7 @@ use crate::bytecode::{BytecodeProgram, Instruction};
 use crate::compiler::{compile_program_with_options, CompileOptions};
 use crate::evaluator::Value;
 use crate::parser::parse_source;
-use crate::semantic::analyze;
+use crate::semantic::analyze_with_warnings;
 
 #[derive(Debug, Clone)]
 pub struct NativeCompileError {
@@ -63,7 +63,8 @@ pub fn compile_h_to_native_artifacts_with_options(
     options: CompileOptions,
 ) -> Result<NativeBuildArtifacts, NativeCompileError> {
     let program = parse_source(source).map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
-    analyze(&program).map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
+    analyze_with_warnings(&program)
+        .map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
     let bytecode = compile_program_with_options(&program, options)
         .map_err(|e| NativeCompileError::new(format!("Compile error: {}", e)))?;
 
@@ -352,6 +353,9 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"to_float_string\" => { let scaled = builtin_int_arg(args, 0)?; Value::Str(format_scaled_thousand(scaled)) },\n");
     out.push_str("    \"trim\" => { let s = builtin_str_arg(args, 0)?; Value::Str(s.trim().to_string()) },\n");
     out.push_str("    \"replace\" => { let source = builtin_str_arg(args, 0)?; let from = builtin_str_arg(args, 1)?; let to = builtin_str_arg(args, 2)?; Value::Str(source.replace(from, to)) },\n");
+    out.push_str("    \"format\" => { let template = builtin_str_arg(args, 0)?; let placeholders = template.matches(\"{}\").count(); let provided = args.len().saturating_sub(1); if placeholders != provided { return Err(format!(\"format expects {} value(s) for template placeholders, got {}\", placeholders, provided)); } let mut rendered = String::new(); let mut rest = template; for value in &args[1..] { if let Some(pos) = rest.find(\"{}\") { rendered.push_str(&rest[..pos]); rendered.push_str(&builtin_value_to_string(value)); rest = &rest[pos + 2..]; } } rendered.push_str(rest); Value::Str(rendered) },\n");
+    out.push_str("    \"iter_len\" => { let iterable = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; match iterable { Value::Int(v) => { if *v < 0 { return Err(\"iter_len expects non-negative integer range\".to_string()); } Value::Int(*v) }, Value::Str(raw) => { if let Ok((_, items)) = parse_ring(raw) { Value::Int(items.len() as i64) } else { Value::Int(sequence_items(raw).len() as i64) } }, _ => return Err(\"iter_len expects integer range or string-backed collection\".to_string()) } },\n");
+    out.push_str("    \"iter_get\" => { let iterable = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; let idx = builtin_int_arg(args, 1)?; if idx < 0 { return Err(\"iter_get expects non-negative index\".to_string()); } match iterable { Value::Int(v) => { if *v < 0 { return Err(\"iter_get expects non-negative integer range\".to_string()); } if idx >= *v { Value::Maybe } else { Value::Int(idx) } }, Value::Str(raw) => { let items = if let Ok((_, items)) = parse_ring(raw) { items } else { sequence_items(raw) }; match items.get(idx as usize) { Some(v) => Value::Str(v.clone()), None => Value::Maybe } }, _ => return Err(\"iter_get expects integer range or string-backed collection\".to_string()) } },\n");
     out.push_str("    \"array_new\" => Value::Str(String::new()),\n");
     out.push_str("    \"array_len\" => Value::Int(sequence_items(builtin_str_arg(args, 0)?).len() as i64),\n");
     out.push_str("    \"array_push\" => { let sequence = builtin_str_arg(args, 0)?; let item = builtin_str_arg(args, 1)?; Value::Str(push_sequence_item(sequence, item)) },\n");

@@ -8,6 +8,7 @@ use crate::ast::{
 use crate::builtin::normalize_builtin_name;
 use crate::bytecode::{BytecodeFunction, BytecodeProgram, Instruction};
 use crate::evaluator::Value;
+use crate::token::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CycleProfile {
@@ -201,20 +202,48 @@ pub struct CompileResult {
 
 #[derive(Debug, Clone)]
 pub struct CompileError {
+    pub line: usize,
+    pub column: usize,
     pub message: String,
+    pub source_line: Option<String>,
 }
 
 impl CompileError {
     fn new(message: impl Into<String>) -> Self {
         Self {
+            line: 0,
+            column: 0,
             message: message.into(),
+            source_line: None,
+        }
+    }
+
+    fn at(span: Span, source: &str, message: impl Into<String>) -> Self {
+        Self {
+            line: span.line,
+            column: span.column,
+            message: message.into(),
+            source_line: source_line_for(source, span.line),
         }
     }
 }
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+        if self.line > 0 && self.column > 0 {
+            write!(f, "{} at {}:{}", self.message, self.line, self.column)?;
+            if let Some(line) = &self.source_line {
+                write!(
+                    f,
+                    "\n{}\n{}^",
+                    line,
+                    " ".repeat(self.column.saturating_sub(1))
+                )?;
+            }
+            Ok(())
+        } else {
+            write!(f, "{}", self.message)
+        }
     }
 }
 
@@ -714,7 +743,7 @@ pub fn compile_program_with_options(
     let mut functions = HashMap::new();
     let mut reports = Vec::new();
     for f in &program.functions {
-        let mut ctx = FunctionCompiler::new(f.name.clone(), options.clone());
+        let mut ctx = FunctionCompiler::new(f.name.clone(), options.clone(), program.source.clone());
         for stmt in &f.body {
             ctx.compile_stmt(stmt)?;
         }
@@ -854,7 +883,7 @@ fn collect_required_cycle_keys_stmt(
                 collect_required_cycle_keys_stmt(stmt, keys);
             }
         }
-        Stmt::While { body, .. } | Stmt::Repeat { body, .. } => {
+        Stmt::While { body, .. } | Stmt::Repeat { body, .. } | Stmt::For { body, .. } => {
             for stmt in body {
                 collect_required_cycle_keys_stmt(stmt, keys);
             }
@@ -895,6 +924,7 @@ fn collect_execute_required_cycle_keys(
             condition,
             then_body,
             else_body,
+            ..
         } => {
             collect_expr_cycle_keys(condition, keys);
             for stmt in then_body {
@@ -904,7 +934,7 @@ fn collect_execute_required_cycle_keys(
                 collect_execute_required_cycle_keys(stmt, keys);
             }
         }
-        Stmt::Repeat { times, body } => {
+        Stmt::Repeat { times, body, .. } => {
             collect_expr_cycle_keys(times, keys);
             for stmt in body {
                 collect_execute_required_cycle_keys(stmt, keys);
@@ -916,7 +946,7 @@ fn collect_execute_required_cycle_keys(
 
 fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<String>) {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+        Expr::Number(..) | Expr::String(..) | Expr::Bool(..) | Expr::Maybe(_) | Expr::Var(..) => {
             keys.insert("expr.atom".to_string());
             keys.insert("energy.expr.atom".to_string());
         }
@@ -925,7 +955,9 @@ fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<St
             keys.insert("expr.unary".to_string());
             keys.insert("energy.expr.unary".to_string());
         }
-        Expr::Binary { left, op, right } => {
+        Expr::Binary {
+            left, op, right, ..
+        } => {
             collect_expr_cycle_keys(left, keys);
             collect_expr_cycle_keys(right, keys);
             let key = match op {
@@ -948,6 +980,7 @@ fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<St
 
 struct FunctionCompiler {
     function_name: String,
+    source: String,
     options: CompileOptions,
     active_cycle_profile: CycleCostProfile,
     code: Vec<Instruction>,
@@ -957,7 +990,7 @@ struct FunctionCompiler {
 }
 
 impl FunctionCompiler {
-    fn new(function_name: String, options: CompileOptions) -> Self {
+    fn new(function_name: String, options: CompileOptions, source: String) -> Self {
         let active_cycle_profile = options
             .cycle_profile_override
             .clone()
@@ -965,6 +998,7 @@ impl FunctionCompiler {
 
         Self {
             function_name,
+            source,
             options,
             active_cycle_profile,
             code: Vec::new(),
@@ -982,11 +1016,11 @@ impl FunctionCompiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         match stmt {
-            Stmt::OwnDecl { name, expr } => {
+            Stmt::OwnDecl { name, expr, .. } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::DefineVar(name.clone()));
             }
-            Stmt::RefDecl { name, target } => {
+            Stmt::RefDecl { name, target, .. } => {
                 self.code.push(Instruction::DeclareRef {
                     name: name.clone(),
                     target: target.clone(),
@@ -998,11 +1032,13 @@ impl FunctionCompiler {
                     self.compile_stmt(s)?;
                 }
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, .. } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::StoreVar(name.clone()));
             }
-            Stmt::Instruction { op, target, rhs } => match op {
+            Stmt::Instruction {
+                op, target, rhs, ..
+            } => match op {
                 AstInstruction::Mov => {
                     self.compile_expr(rhs)?;
                     if is_memory_target(target) {
@@ -1052,6 +1088,7 @@ impl FunctionCompiler {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => {
                 self.compile_expr(condition)?;
                 let jump_if_false_pos = self.code.len();
@@ -1077,7 +1114,9 @@ impl FunctionCompiler {
                     self.patch_jump(jump_end_pos, end_pos)?;
                 }
             }
-            Stmt::While { condition, body } => {
+            Stmt::While {
+                condition, body, ..
+            } => {
                 let loop_start = self.code.len();
                 self.compile_expr(condition)?;
                 let jump_if_false_pos = self.code.len();
@@ -1091,7 +1130,7 @@ impl FunctionCompiler {
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
             }
-            Stmt::Repeat { times, body } => {
+            Stmt::Repeat { times, body, .. } => {
                 self.compile_expr(times)?;
                 let counter_name = self.next_temp("repeat_counter");
                 self.code.push(Instruction::DefineVar(counter_name.clone()));
@@ -1116,10 +1155,57 @@ impl FunctionCompiler {
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
             }
+            Stmt::For {
+                name,
+                iterable,
+                body,
+                ..
+            } => {
+                self.compile_expr(iterable)?;
+                let iterable_name = self.next_temp("for_iterable");
+                self.code.push(Instruction::DefineVar(iterable_name.clone()));
+
+                self.code.push(Instruction::LoadVar(iterable_name.clone()));
+                self.code.push(Instruction::Call("iter_len".to_string(), 1));
+                let limit_name = self.next_temp("for_limit");
+                self.code.push(Instruction::DefineVar(limit_name.clone()));
+
+                let index_name = self.next_temp("for_index");
+                self.code.push(Instruction::PushInt(0));
+                self.code.push(Instruction::DefineVar(index_name.clone()));
+
+                self.code.push(Instruction::PushMaybe);
+                self.code.push(Instruction::DefineVar(name.clone()));
+
+                let loop_start = self.code.len();
+                self.code.push(Instruction::LoadVar(index_name.clone()));
+                self.code.push(Instruction::LoadVar(limit_name.clone()));
+                self.code.push(Instruction::Lt);
+                let jump_if_false_pos = self.code.len();
+                self.code.push(Instruction::JumpIfFalse(usize::MAX));
+
+                self.code.push(Instruction::LoadVar(iterable_name.clone()));
+                self.code.push(Instruction::LoadVar(index_name.clone()));
+                self.code.push(Instruction::Call("iter_get".to_string(), 2));
+                self.code.push(Instruction::StoreVar(name.clone()));
+
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
+
+                self.code.push(Instruction::LoadVar(index_name.clone()));
+                self.code.push(Instruction::PushInt(1));
+                self.code.push(Instruction::Add);
+                self.code.push(Instruction::StoreVar(index_name.clone()));
+                self.code.push(Instruction::Jump(loop_start));
+
+                let loop_end = self.code.len();
+                self.patch_jump(jump_if_false_pos, loop_end)?;
+            }
             Stmt::CycleContract { .. } => {
                 self.compile_cycle_contract(stmt)?;
             }
-            Stmt::PrintBlock(fields) => {
+            Stmt::PrintBlock { fields, .. } => {
                 self.code.push(Instruction::PrintBegin);
                 for (key, expr) in fields {
                     self.compile_expr(expr)?;
@@ -1127,14 +1213,14 @@ impl FunctionCompiler {
                 }
                 self.code.push(Instruction::PrintEnd);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return { expr, .. } => {
                 match expr {
                     Some(e) => self.compile_expr(e)?,
                     None => self.code.push(Instruction::PushUnit),
                 }
                 self.code.push(Instruction::Return);
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr { expr, .. } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::Pop);
             }
@@ -1151,19 +1237,21 @@ impl FunctionCompiler {
         }
 
         match expr {
-            Expr::Number(v) => self.code.push(Instruction::PushInt(*v)),
-            Expr::String(v) => self.code.push(Instruction::PushStr(v.clone())),
-            Expr::Bool(v) => self.code.push(Instruction::PushBool(*v)),
-            Expr::Maybe => self.code.push(Instruction::PushMaybe),
-            Expr::Var(v) => self.code.push(Instruction::LoadVar(v.clone())),
-            Expr::Unary { op, rhs } => {
+            Expr::Number(v, _) => self.code.push(Instruction::PushInt(*v)),
+            Expr::String(v, _) => self.code.push(Instruction::PushStr(v.clone())),
+            Expr::Bool(v, _) => self.code.push(Instruction::PushBool(*v)),
+            Expr::Maybe(_) => self.code.push(Instruction::PushMaybe),
+            Expr::Var(v, _) => self.code.push(Instruction::LoadVar(v.clone())),
+            Expr::Unary { op, rhs, .. } => {
                 self.compile_expr(rhs)?;
                 match op {
                     UnaryOp::Neg => self.code.push(Instruction::Neg),
                     UnaryOp::Not => self.code.push(Instruction::Not),
                 }
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary {
+                left, op, right, ..
+            } => {
                 self.compile_expr(left)?;
                 self.compile_expr(right)?;
                 self.code.push(match op {
@@ -1187,7 +1275,7 @@ impl FunctionCompiler {
                     BinaryOp::Shr => Instruction::Shr,
                 });
             }
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 for arg in args {
                     self.compile_expr(arg)?;
                 }
@@ -1231,7 +1319,7 @@ impl FunctionCompiler {
     }
 
     fn compile_cycle_contract(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
-        let Stmt::CycleContract { spec, body } = stmt else {
+        let Stmt::CycleContract { spec, body, span } = stmt else {
             return Err(CompileError::new(
                 "Internal compiler error: expected cycle contract statement",
             ));
@@ -1262,14 +1350,18 @@ impl FunctionCompiler {
                     if !self.options.strict_cycle_contracts {
                         // relaxed mode ignores strict overflow failure
                     } else {
-                    return Err(CompileError::new(format!(
-                        "Cycle contract overflow in function `{}` contract #{} (profile: {}): block costs {} cycles but contract allows {}",
-                        self.function_name,
-                        contract_index,
-                        self.active_cycle_profile.name,
-                        total_cycles,
-                        spec.cycles
-                    )));
+                        return Err(CompileError::at(
+                            *span,
+                            &self.source,
+                            format!(
+                                "Cycle contract overflow in function `{}` contract #{} (profile: {}): execute block costs {} cycles but budget is {}",
+                                self.function_name,
+                                contract_index,
+                                self.active_cycle_profile.name,
+                                total_cycles,
+                                spec.cycles
+                            ),
+                        ));
                     }
                 }
                 ContractPolicy::PadNop => {
@@ -1283,14 +1375,18 @@ impl FunctionCompiler {
                     if !self.options.strict_cycle_contracts {
                         // relaxed mode ignores strict underflow failure
                     } else {
-                    return Err(CompileError::new(format!(
-                        "Cycle contract underflow in function `{}` contract #{} (profile: {}): block costs {} cycles but contract requires {}",
-                        self.function_name,
-                        contract_index,
-                        self.active_cycle_profile.name,
-                        total_cycles,
-                        spec.cycles
-                    )));
+                        return Err(CompileError::at(
+                            *span,
+                            &self.source,
+                            format!(
+                                "Cycle contract underflow in function `{}` contract #{} (profile: {}): execute block costs {} cycles but budget is {}",
+                                self.function_name,
+                                contract_index,
+                                self.active_cycle_profile.name,
+                                total_cycles,
+                                spec.cycles
+                            ),
+                        ));
                     }
                 }
                 ContractPolicy::PadNop => {
@@ -1307,14 +1403,18 @@ impl FunctionCompiler {
                 match spec.on_overflow {
                     ContractPolicy::CompileError => {
                         if self.options.strict_cycle_contracts {
-                            return Err(CompileError::new(format!(
-                                "Energy contract overflow in function `{}` contract #{} (profile: {}): block costs {} nJ but contract allows {} nJ",
-                                self.function_name,
-                                contract_index,
-                                self.active_cycle_profile.name,
-                                total_energy_nj,
-                                energy_budget_nj
-                            )));
+                            return Err(CompileError::at(
+                                *span,
+                                &self.source,
+                                format!(
+                                    "Energy contract overflow in function `{}` contract #{} (profile: {}): execute block costs {} nJ but budget is {} nJ",
+                                    self.function_name,
+                                    contract_index,
+                                    self.active_cycle_profile.name,
+                                    total_energy_nj,
+                                    energy_budget_nj
+                                ),
+                            ));
                         }
                     }
                     ContractPolicy::PadNop => {
@@ -1353,7 +1453,9 @@ impl FunctionCompiler {
         track_energy: bool,
     ) -> Result<ExecuteCost, CompileError> {
         match stmt {
-            Stmt::Instruction { op, target, rhs } => {
+            Stmt::Instruction {
+                op, target, rhs, ..
+            } => {
                 let cycles = stmt_cycle_cost(stmt, &self.active_cycle_profile)?;
                 let energy_nj = if track_energy {
                     stmt_energy_cost(stmt, &self.active_cycle_profile)?
@@ -1395,7 +1497,7 @@ impl FunctionCompiler {
                 cycles: 0,
                 energy_nj: 0,
             }),
-            Stmt::OwnDecl { name, expr } => {
+            Stmt::OwnDecl { name, expr, .. } => {
                 self.compile_stmt(stmt)?;
                 let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
                 cycles = cycles
@@ -1424,7 +1526,7 @@ impl FunctionCompiler {
                 }
                 Ok(ExecuteCost { cycles, energy_nj })
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, .. } => {
                 self.compile_stmt(stmt)?;
                 let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
                 cycles = cycles
@@ -1457,6 +1559,7 @@ impl FunctionCompiler {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => {
                 let Some(cond) =
                     eval_execute_const_expr(condition, const_env, self.options.fast_math)?
@@ -1488,7 +1591,7 @@ impl FunctionCompiler {
                 }
                 Ok(total)
             }
-            Stmt::Repeat { times, body } => {
+            Stmt::Repeat { times, body, .. } => {
                 let Some(reps) = eval_execute_const_expr(times, const_env, self.options.fast_math)?
                 else {
                     return Err(CompileError::new(
@@ -1556,10 +1659,10 @@ impl FunctionCompiler {
 
 fn const_expr_to_value(expr: &Expr) -> Result<Value, CompileError> {
     match expr {
-        Expr::Number(v) => Ok(Value::Int(*v)),
-        Expr::String(v) => Ok(Value::Str(v.clone())),
-        Expr::Bool(v) => Ok(Value::Bool(*v)),
-        Expr::Maybe => Ok(Value::Maybe),
+        Expr::Number(v, _) => Ok(Value::Int(*v)),
+        Expr::String(v, _) => Ok(Value::Str(v.clone())),
+        Expr::Bool(v, _) => Ok(Value::Bool(*v)),
+        Expr::Maybe(_) => Ok(Value::Maybe),
         _ => Err(CompileError::new(
             "Data section supports only literal constants in compiled mode",
         )),
@@ -1586,7 +1689,7 @@ fn cycle_cost(profile: &CycleCostProfile, key: &str) -> Result<u64, CompileError
 
 fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, CompileError> {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+        Expr::Number(..) | Expr::String(..) | Expr::Bool(..) | Expr::Maybe(_) | Expr::Var(..) => {
             cycle_cost(profile, "expr.atom")
         }
         Expr::Unary { rhs, .. } => {
@@ -1595,7 +1698,9 @@ fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Compi
                 .checked_add(cycle_cost(profile, "expr.unary")?)
                 .ok_or_else(|| CompileError::new("Cycle count overflow in expression"))
         }
-        Expr::Binary { left, op, right } => {
+        Expr::Binary {
+            left, op, right, ..
+        } => {
             let left_cost = expr_cycle_cost(left, profile)?;
             let right_cost = expr_cycle_cost(right, profile)?;
             let op_cost = match op {
@@ -1618,7 +1723,7 @@ fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Compi
 
 fn expr_energy_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, CompileError> {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+        Expr::Number(..) | Expr::String(..) | Expr::Bool(..) | Expr::Maybe(_) | Expr::Var(..) => {
             cycle_cost(profile, "energy.expr.atom")
         }
         Expr::Unary { rhs, .. } => {
@@ -1627,7 +1732,9 @@ fn expr_energy_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Comp
                 .checked_add(cycle_cost(profile, "energy.expr.unary")?)
                 .ok_or_else(|| CompileError::new("Energy count overflow in expression"))
         }
-        Expr::Binary { left, op, right } => {
+        Expr::Binary {
+            left, op, right, ..
+        } => {
             let left_cost = expr_energy_cost(left, profile)?;
             let right_cost = expr_energy_cost(right, profile)?;
             let op_cost = match op {
@@ -1692,12 +1799,12 @@ enum FoldValue {
 
 fn fold_expr(expr: &Expr, fast_math: bool) -> Result<Option<FoldValue>, CompileError> {
     match expr {
-        Expr::Number(v) => Ok(Some(FoldValue::Int(*v))),
-        Expr::String(v) => Ok(Some(FoldValue::Str(v.clone()))),
-        Expr::Bool(v) => Ok(Some(FoldValue::Bool(*v))),
-        Expr::Maybe => Ok(Some(FoldValue::Maybe)),
-        Expr::Var(_) | Expr::Call { .. } => Ok(None),
-        Expr::Unary { op, rhs } => {
+        Expr::Number(v, _) => Ok(Some(FoldValue::Int(*v))),
+        Expr::String(v, _) => Ok(Some(FoldValue::Str(v.clone()))),
+        Expr::Bool(v, _) => Ok(Some(FoldValue::Bool(*v))),
+        Expr::Maybe(_) => Ok(Some(FoldValue::Maybe)),
+        Expr::Var(..) | Expr::Call { .. } => Ok(None),
+        Expr::Unary { op, rhs, .. } => {
             let Some(rhs) = fold_expr(rhs, fast_math)? else {
                 return Ok(None);
             };
@@ -1708,7 +1815,9 @@ fn fold_expr(expr: &Expr, fast_math: bool) -> Result<Option<FoldValue>, CompileE
                 _ => Ok(None),
             }
         }
-        Expr::Binary { left, op, right } => {
+        Expr::Binary {
+            left, op, right, ..
+        } => {
             let Some(left) = fold_expr(left, fast_math)? else {
                 return Ok(None);
             };
@@ -1799,13 +1908,13 @@ fn eval_execute_const_expr(
     fast_math: bool,
 ) -> Result<Option<FoldValue>, CompileError> {
     match expr {
-        Expr::Number(v) => Ok(Some(FoldValue::Int(*v))),
-        Expr::String(v) => Ok(Some(FoldValue::Str(v.clone()))),
-        Expr::Bool(v) => Ok(Some(FoldValue::Bool(*v))),
-        Expr::Maybe => Ok(Some(FoldValue::Maybe)),
-        Expr::Var(name) => Ok(const_env.get(name).cloned()),
+        Expr::Number(v, _) => Ok(Some(FoldValue::Int(*v))),
+        Expr::String(v, _) => Ok(Some(FoldValue::Str(v.clone()))),
+        Expr::Bool(v, _) => Ok(Some(FoldValue::Bool(*v))),
+        Expr::Maybe(_) => Ok(Some(FoldValue::Maybe)),
+        Expr::Var(name, _) => Ok(const_env.get(name).cloned()),
         Expr::Call { .. } => Ok(None),
-        Expr::Unary { op, rhs } => {
+        Expr::Unary { op, rhs, .. } => {
             let Some(rhs) = eval_execute_const_expr(rhs, const_env, fast_math)? else {
                 return Ok(None);
             };
@@ -1816,7 +1925,9 @@ fn eval_execute_const_expr(
                 _ => Ok(None),
             }
         }
-        Expr::Binary { left, op, right } => {
+        Expr::Binary {
+            left, op, right, ..
+        } => {
             let Some(left) = eval_execute_const_expr(left, const_env, fast_math)? else {
                 return Ok(None);
             };
@@ -1868,6 +1979,13 @@ fn should_const_fold(options: &CompileOptions) -> bool {
 
 fn should_peephole(options: &CompileOptions) -> bool {
     options.peephole && options.opt_level >= OptimizationLevel::O2
+}
+
+fn source_line_for(source: &str, line: usize) -> Option<String> {
+    if line == 0 {
+        return None;
+    }
+    source.lines().nth(line.saturating_sub(1)).map(|v| v.to_string())
 }
 
 pub fn render_contract_report_text(reports: &[ContractCompileReport]) -> String {
