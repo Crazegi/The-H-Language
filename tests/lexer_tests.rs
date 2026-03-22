@@ -37,6 +37,14 @@ fn rejects_illegal_character() {
 }
 
 #[test]
+fn rejects_brace_characters() {
+    let src = "section .text:\n  fn main() {\n    return 0\n  }\n";
+    let mut lexer = Lexer::new(src);
+    let err = lexer.tokenize().expect_err("brace characters should fail lexing");
+    assert!(err.message.contains("Illegal character '{'"));
+}
+
+#[test]
 fn rejects_tab_indentation() {
     let src = "section .data:\n\tname: \"x\"\n";
     let mut lexer = Lexer::new(src);
@@ -70,14 +78,13 @@ fn lexes_control_flow_operators() {
 }
 
 #[test]
-fn lexes_java_style_block_and_types() {
-    let src = "section .text:\n  fn main() {\n    int x = 3;\n    string s = \"ok\";\n    bool b = true;\n  }\n";
+fn lexes_typed_declarations_and_semicolons() {
+    let src = "section .text:\n  fn main():\n    int x = 3;\n    string s = \"ok\";\n    bool b = true;\n";
     let mut lexer = Lexer::new(src);
     let tokens = lexer.tokenize().expect("tokenization should succeed");
     let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
 
-    assert!(kinds.contains(&TokenKind::LBrace));
-    assert!(kinds.contains(&TokenKind::RBrace));
+    assert!(kinds.contains(&TokenKind::Colon));
     assert!(kinds.contains(&TokenKind::Semicolon));
     assert!(kinds.contains(&TokenKind::KeywordInt));
     assert!(kinds.contains(&TokenKind::KeywordString));

@@ -56,19 +56,16 @@ fn vm_supports_repeat_and_exotic_logic() {
   title: "phase"
 
 section .text:
-  fn main() {
-    int total = 1;
-    repeat 4 {
-      add total, 1;
-    }
+  fn main():
+    int total = 1
+    repeat 4:
+      add total, 1
 
-    own a = phase(true, maybe);
-    own b = true xor false;
-    if collapse((b and not false) or a) {
-      return total;
-    }
-    return 0;
-  }
+    own a = phase(true, maybe)
+    own b = true xor false
+    if collapse((b and not false) or a):
+      return total
+    return 0
 "#;
 
     let program = parse_source(src).expect("parse should pass");

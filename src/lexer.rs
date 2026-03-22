@@ -178,16 +178,6 @@ impl Lexer {
                     self.advance();
                     tok
                 }
-                '{' => {
-                    let tok = Token::new(TokenKind::LBrace, "{", self.line, self.column);
-                    self.advance();
-                    tok
-                }
-                '}' => {
-                    let tok = Token::new(TokenKind::RBrace, "}", self.line, self.column);
-                    self.advance();
-                    tok
-                }
                 ';' => {
                     let tok = Token::new(TokenKind::Semicolon, ";", self.line, self.column);
                     self.advance();

@@ -37,7 +37,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 ## Implemented Features
 
 - Sections: `section .data:` and `section .text:`
-- Functions: `fn name(a, b):` and `fn name(a, b) { ... }`
+- Functions: `fn name(a, b):` with indentation-based blocks
 - Ownership/borrowing: `own` and `ref`
 - Typed declarations in block syntax: `int`, `string`, `bool`
 - Assembly instructions: `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`

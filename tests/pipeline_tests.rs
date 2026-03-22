@@ -47,26 +47,24 @@ section .text:
 }
 
 #[test]
-fn parses_java_style_syntax_and_math_builtins() {
+fn parses_colon_syntax_and_math_builtins() {
     let src = r#"section .data:
   cap: 100
 
 section .text:
-  fn main() {
-    int x = -9;
-    int y = abs(x);
-    int z = pow(y, 2);
-    int root = sqrt(z);
-    int low = min(root, 4);
-    int high = max(low, 7);
-    int bounded = clamp(high, 0, cap);
-    if (bounded >= 7) {
+  fn main():
+    int x = -9
+    int y = abs(x)
+    int z = pow(y, 2)
+    int root = sqrt(z)
+    int low = min(root, 4)
+    int high = max(low, 7)
+    int bounded = clamp(high, 0, cap)
+    if bounded >= 7:
       print:
         event: "java_style"
         reading: bounded
-    }
-    return bounded;
-  }
+    return bounded
 "#;
 
     let program = parse_source(src).expect("parse should pass");
@@ -81,22 +79,19 @@ fn runs_repeat_and_tristate_logic_features() {
   seed: "Pulse"
 
 section .text:
-  fn main() {
-    int n = 0;
-    repeat 3 {
-      add n, 2;
-    }
+  fn main():
+    int n = 0
+    repeat 3:
+      add n, 2
 
-    string loud = upper(seed);
-    bool has_u = contains(loud, "U");
-    own gate = phase(has_u, maybe);
-    own final = collapse((true xor false) and (not false or gate));
+    string loud = upper(seed)
+    bool has_u = contains(loud, "U")
+    own gate = phase(has_u, maybe)
+    own final = collapse((true xor false) and (not false or gate))
 
-    if (final) {
-      return n;
-    }
-    return 0;
-  }
+    if final:
+      return n
+    return 0
 "#;
 
     let program = parse_source(src).expect("parse should pass");
@@ -145,4 +140,16 @@ fn rejects_invalid_cycle_contract_policy() {
 
     let err = parse_source(src).expect_err("invalid policy should fail parse");
     assert!(err.message.contains("Invalid contract policy"));
+}
+
+#[test]
+fn rejects_brace_block_syntax() {
+    let src = r#"section .text:
+  fn main() {
+    return 0
+  }
+"#;
+
+    let err = parse_source(src).expect_err("brace block syntax should fail parse");
+    assert!(err.message.contains("Illegal character '{'"));
 }

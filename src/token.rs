@@ -60,8 +60,6 @@ pub enum TokenKind {
     RParen,
     LBracket,
     RBracket,
-    LBrace,
-    RBrace,
     Semicolon,
 }
 
@@ -138,8 +136,6 @@ impl fmt::Display for TokenKind {
             RParen => "RPAREN",
             LBracket => "LBRACKET",
             RBracket => "RBRACKET",
-            LBrace => "LBRACE",
-            RBrace => "RBRACE",
             Semicolon => "SEMICOLON",
         };
         write!(f, "{}", label)

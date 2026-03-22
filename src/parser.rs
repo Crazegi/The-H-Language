@@ -291,25 +291,9 @@ impl Parser {
             return Ok(body);
         }
 
-        if self.match_kind(TokenKind::LBrace) {
-            let mut body = Vec::new();
-            self.skip_brace_layout();
-            while !self.check(TokenKind::RBrace) && !self.is_at_end() {
-                self.skip_brace_layout();
-                if self.check(TokenKind::RBrace) {
-                    break;
-                }
-                body.push(self.parse_statement()?);
-                self.skip_brace_layout();
-            }
-            self.expect(TokenKind::RBrace, "Expected `}` to close block")?;
-            self.consume_newline_if_present();
-            return Ok(body);
-        }
-
         Err(ParseError::new(
             self.peek(),
-            format!("Expected ':' or '{{' for {}", context),
+            format!("Expected ':' for {}", context),
         ))
     }
 
@@ -666,19 +650,6 @@ impl Parser {
             self.advance();
         }
         self.consume_newline_if_present();
-    }
-
-    fn skip_brace_layout(&mut self) {
-        loop {
-            if self.check(TokenKind::Newline)
-                || self.check(TokenKind::Indent)
-                || self.check(TokenKind::Dedent)
-            {
-                self.advance();
-            } else {
-                break;
-            }
-        }
     }
 
     fn skip_newlines(&mut self) {
