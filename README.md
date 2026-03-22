@@ -40,6 +40,8 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Functions: `fn name(a, b):` with indentation-based blocks
 - Ownership/borrowing: `own` and `ref`
 - Hardware port ownership: `own [port_a]`, `ref [port_a]`, and `ref alias = &[port_a]`
+- Interrupt handlers: `interrupt fn handler():`
+- Yield windows for interrupt grants: `yield [port_a] to handler:`
 - Typed declarations in block syntax: `int`, `string`, `bool`
 - Assembly instructions: `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
 - Memory-mapped destination style: `mov [port_a], r1`
@@ -194,6 +196,85 @@ Natural next expansions:
 - explicit ownership transfer semantics between functions,
 - scoped ownership blocks,
 - capability-like port tokens for larger system decomposition.
+
+## Interrupt-Safe Ownership Yields
+
+The ownership model now includes an interrupt-aware grant path.
+This solves the common embedded conflict where a normal function owns a hardware port,
+but an interrupt handler must touch the same endpoint safely.
+
+### Syntax
+
+Interrupt function declaration:
+
+```text
+interrupt fn emergency_interrupt():
+  own r1 = 1
+  mov [port_a], r1
+```
+
+Yield window declaration from the owner function:
+
+```text
+yield [port_a] to emergency_interrupt:
+  mov [port_a], r1
+```
+
+### Compile-time rules
+
+1. Interrupt handler shape:
+- `interrupt fn` cannot declare parameters.
+
+2. Ownership discipline:
+- `interrupt fn` cannot declare `own [port]` directly.
+- A normal owner function can grant access with `yield [port] to handler:`.
+
+3. Grant target validation:
+- The yield target must be an `interrupt fn`.
+- A function can only yield a port it actually owns.
+
+4. Effective access in handlers:
+- Interrupt handler writes to `[port]` are valid only when that port was granted through a yield.
+- Without a grant, writes are rejected with the same ownership diagnostics.
+
+### Example: valid
+
+```text
+section .text:
+  interrupt fn emergency_interrupt():
+    own r1 = 7
+    mov [port_a], r1
+    return r1
+
+  fn main():
+    own [port_a]
+    own r1 = 1
+    yield [port_a] to emergency_interrupt:
+      mov [port_a], r1
+    return r1
+```
+
+### Example: rejected (wrong target)
+
+```text
+section .text:
+  fn helper():
+    return 0
+
+  fn main():
+    own [port_a]
+    yield [port_a] to helper:
+      mov [port_a], 1
+    return 0
+```
+
+Reason: yield target is not declared as `interrupt fn`.
+
+### Current implementation scope
+
+Current implementation is compile-time capability validation.
+It does not yet emit runtime preemption locks/flags automatically.
+That keeps behavior deterministic and simple while still blocking unsafe ownership patterns.
 
 ## Cycle Contracts
 

@@ -858,6 +858,11 @@ fn collect_required_cycle_keys_stmt(
                 collect_required_cycle_keys_stmt(stmt, keys);
             }
         }
+        Stmt::YieldPort { body, .. } => {
+            for stmt in body {
+                collect_required_cycle_keys_stmt(stmt, keys);
+            }
+        }
         _ => {}
     }
 }
@@ -987,6 +992,11 @@ impl FunctionCompiler {
                 });
             }
             Stmt::PortOwn { .. } | Stmt::PortRef { .. } => {}
+            Stmt::YieldPort { body, .. } => {
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
+            }
             Stmt::Assign { name, expr } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::StoreVar(name.clone()));

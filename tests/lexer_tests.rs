@@ -112,3 +112,16 @@ fn lexes_cycle_contract_block_and_memory_operands() {
         .iter()
         .any(|t| t.kind == TokenKind::Number && t.lexeme == "0x00"));
 }
+
+#[test]
+fn lexes_interrupt_and_yield_keywords() {
+    let src = "section .text:\n  interrupt fn emergency_interrupt():\n    mov [port_a], 1\n\n  fn main():\n    own [port_a]\n    yield [port_a] to emergency_interrupt:\n      mov [port_a], 2\n";
+
+    let mut lexer = Lexer::new(src);
+    let tokens = lexer.tokenize().expect("tokenization should succeed");
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+
+    assert!(kinds.contains(&TokenKind::KeywordInterrupt));
+    assert!(kinds.contains(&TokenKind::KeywordYield));
+    assert!(kinds.contains(&TokenKind::KeywordTo));
+}

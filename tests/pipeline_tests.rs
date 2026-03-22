@@ -210,3 +210,76 @@ fn semantic_rejects_duplicate_port_owners_across_functions() {
     let err = analyze(&program).expect_err("duplicate port ownership should fail");
     assert!(err.message.contains("ownership collision"));
 }
+
+#[test]
+fn semantic_allows_interrupt_port_access_when_yielded() {
+    let src = r#"section .text:
+  interrupt fn emergency_interrupt():
+    own r1 = 7
+    mov [port_a], r1
+    return r1
+
+  fn main():
+    own [port_a]
+    own r1 = 1
+    yield [port_a] to emergency_interrupt:
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("yielded interrupt access should pass semantic analysis");
+}
+
+#[test]
+fn semantic_rejects_interrupt_port_access_without_yield() {
+    let src = r#"section .text:
+  interrupt fn emergency_interrupt():
+    own r1 = 7
+    mov [port_a], r1
+    return r1
+
+  fn main():
+    own [port_a]
+    own r1 = 1
+    mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("interrupt write without yield should fail");
+    assert!(err.message.contains("requires hardware ownership"));
+}
+
+#[test]
+fn semantic_rejects_yield_to_non_interrupt_function() {
+    let src = r#"section .text:
+  fn helper():
+    return 0
+
+  fn main():
+    own [port_a]
+    yield [port_a] to helper:
+      mov [port_a], 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("yield to non-interrupt should fail");
+    assert!(err.message.contains("must be an `interrupt fn`"));
+}
+
+#[test]
+fn semantic_rejects_interrupt_function_parameters() {
+    let src = r#"section .text:
+  interrupt fn emergency_interrupt(code):
+    return code
+
+  fn main():
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("interrupt functions with params should fail");
+    assert!(err.message.contains("cannot declare parameters"));
+}

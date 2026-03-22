@@ -106,6 +106,7 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {
+        let is_interrupt = self.match_kind(TokenKind::KeywordInterrupt);
         self.expect(TokenKind::KeywordFn, "Expected `fn`")?;
         let name = self.expect_identifier_like("Expected function name")?.lexeme;
         self.expect(TokenKind::LParen, "Expected `(` after function name")?;
@@ -123,7 +124,12 @@ impl Parser {
 
         self.expect(TokenKind::RParen, "Expected `)` after function params")?;
         let body = self.parse_block("function body")?;
-        Ok(Function { name, params, body })
+        Ok(Function {
+            name,
+            is_interrupt,
+            params,
+            body,
+        })
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -208,6 +214,24 @@ impl Parser {
             let times = self.parse_expression()?;
             let body = self.parse_block("repeat body")?;
             return Ok(Stmt::Repeat { times, body });
+        }
+
+        if self.match_kind(TokenKind::KeywordYield) {
+            self.expect(TokenKind::LBracket, "Expected `[` after `yield`")?;
+            let port = self
+                .expect_identifier_like("Expected hardware port after `yield [`")?
+                .lexeme;
+            self.expect(TokenKind::RBracket, "Expected `]` after yield port")?;
+            self.expect(TokenKind::KeywordTo, "Expected `to` in yield statement")?;
+            let handler = self
+                .expect_identifier_like("Expected interrupt handler function name after `to`")?
+                .lexeme;
+            let body = self.parse_block("yield body")?;
+            return Ok(Stmt::YieldPort {
+                port,
+                handler,
+                body,
+            });
         }
 
         if self.match_kind(TokenKind::KeywordContract) {

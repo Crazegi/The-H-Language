@@ -25,12 +25,22 @@ impl std::error::Error for SemanticError {}
 
 pub fn analyze(program: &Program) -> Result<(), SemanticError> {
     let mut signatures: HashMap<String, usize> = HashMap::new();
+    let mut interrupt_names: HashSet<String> = HashSet::new();
     for f in &program.functions {
         if signatures.insert(f.name.clone(), f.params.len()).is_some() {
             return Err(SemanticError::new(format!(
                 "Duplicate function `{}`",
                 f.name
             )));
+        }
+        if f.is_interrupt {
+            interrupt_names.insert(f.name.clone());
+            if !f.params.is_empty() {
+                return Err(SemanticError::new(format!(
+                    "Interrupt function `{}` cannot declare parameters",
+                    f.name
+                )));
+            }
         }
     }
 
@@ -41,11 +51,14 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
     }
 
     let mut port_owners: HashMap<String, String> = HashMap::new();
+    let mut owned_ports_by_function: HashMap<String, HashSet<String>> = HashMap::new();
     for f in &program.functions {
         let mut owned_here = Vec::new();
         for stmt in &f.body {
             collect_owned_ports_stmt(stmt, &mut owned_here);
         }
+
+        owned_ports_by_function.insert(f.name.clone(), owned_here.iter().cloned().collect());
 
         for port in owned_here {
             if let Some(prev_owner) = port_owners.get(&port) {
@@ -61,6 +74,19 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
         }
     }
 
+    let mut granted_ports_by_interrupt: HashMap<String, HashSet<String>> = HashMap::new();
+    for f in &program.functions {
+        for stmt in &f.body {
+            collect_yield_grants_stmt(
+                stmt,
+                &f.name,
+                &port_owners,
+                &interrupt_names,
+                &mut granted_ports_by_interrupt,
+            )?;
+        }
+    }
+
     for f in &program.functions {
         let mut symbols: HashSet<String> = f.params.iter().cloned().collect();
         let mut refs: HashSet<String> = HashSet::new();
@@ -70,13 +96,22 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
                 port_access.insert(port.clone());
             }
         }
+        if f.is_interrupt {
+            if let Some(granted) = granted_ports_by_interrupt.get(&f.name) {
+                port_access.extend(granted.iter().cloned());
+            }
+        }
         for stmt in &f.body {
             analyze_stmt(
                 stmt,
+                &f.name,
+                f.is_interrupt,
                 &mut symbols,
                 &mut refs,
                 &mut port_access,
                 &port_owners,
+                &owned_ports_by_function,
+                &interrupt_names,
                 &program.data,
                 &signatures,
             )?;
@@ -88,10 +123,14 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
 
 fn analyze_stmt(
     stmt: &Stmt,
+    function_name: &str,
+    is_interrupt_fn: bool,
     symbols: &mut HashSet<String>,
     refs: &mut HashSet<String>,
     port_access: &mut HashSet<String>,
     port_owners: &HashMap<String, String>,
+    owned_ports_by_function: &HashMap<String, HashSet<String>>,
+    interrupt_names: &HashSet<String>,
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
 ) -> Result<(), SemanticError> {
@@ -128,6 +167,12 @@ fn analyze_stmt(
             refs.insert(name.clone());
         }
         Stmt::PortOwn { port } => {
+            if is_interrupt_fn {
+                return Err(SemanticError::new(format!(
+                    "Interrupt function `{}` cannot own hardware port `{}` directly; use `yield [port] to {}` from a normal owner function",
+                    function_name, port, function_name
+                )));
+            }
             port_access.insert(port.clone());
         }
         Stmt::PortRef { port } => {
@@ -138,6 +183,55 @@ fn analyze_stmt(
                 )));
             }
             port_access.insert(port.clone());
+        }
+        Stmt::YieldPort {
+            port,
+            handler,
+            body,
+        } => {
+            if is_interrupt_fn {
+                return Err(SemanticError::new(format!(
+                    "Interrupt function `{}` cannot declare `yield` windows",
+                    function_name
+                )));
+            }
+
+            let Some(owned_here) = owned_ports_by_function.get(function_name) else {
+                return Err(SemanticError::new(format!(
+                    "Internal error: missing ownership map for function `{}`",
+                    function_name
+                )));
+            };
+
+            if !owned_here.contains(port) {
+                return Err(SemanticError::new(format!(
+                    "Function `{}` can only yield owned hardware ports; `{}` is not owned here",
+                    function_name, port
+                )));
+            }
+
+            if !interrupt_names.contains(handler) {
+                return Err(SemanticError::new(format!(
+                    "Yield target `{}` must be an `interrupt fn`",
+                    handler
+                )));
+            }
+
+            for s in body {
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
+            }
         }
         Stmt::Assign { name, expr } => {
             if !symbols.contains(name) {
@@ -183,22 +277,70 @@ fn analyze_stmt(
         } => {
             analyze_expr(condition, symbols, data, signatures)?;
             for s in then_body {
-                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
             }
             for s in else_body {
-                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
             }
         }
         Stmt::While { condition, body } => {
             analyze_expr(condition, symbols, data, signatures)?;
             for s in body {
-                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
             }
         }
         Stmt::Repeat { times, body } => {
             analyze_expr(times, symbols, data, signatures)?;
             for s in body {
-                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
             }
         }
         Stmt::CycleContract { spec, body } => {
@@ -211,7 +353,19 @@ fn analyze_stmt(
                         "Cycle contract execute block supports deterministic statements only: instruction, own/assign, if, repeat",
                     ));
                 }
-                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
+                analyze_stmt(
+                    s,
+                    function_name,
+                    is_interrupt_fn,
+                    symbols,
+                    refs,
+                    port_access,
+                    port_owners,
+                    owned_ports_by_function,
+                    interrupt_names,
+                    data,
+                    signatures,
+                )?;
             }
         }
         Stmt::PrintBlock(fields) => {
@@ -338,8 +492,76 @@ fn collect_owned_ports_stmt(stmt: &Stmt, out: &mut Vec<String>) {
                 collect_owned_ports_stmt(s, out);
             }
         }
+        Stmt::YieldPort { body, .. } => {
+            for s in body {
+                collect_owned_ports_stmt(s, out);
+            }
+        }
         _ => {}
     }
+}
+
+fn collect_yield_grants_stmt(
+    stmt: &Stmt,
+    function_name: &str,
+    port_owners: &HashMap<String, String>,
+    interrupt_names: &HashSet<String>,
+    out: &mut HashMap<String, HashSet<String>>,
+) -> Result<(), SemanticError> {
+    match stmt {
+        Stmt::YieldPort {
+            port,
+            handler,
+            body,
+        } => {
+            if !interrupt_names.contains(handler) {
+                return Err(SemanticError::new(format!(
+                    "Yield target `{}` must be an `interrupt fn`",
+                    handler
+                )));
+            }
+
+            let Some(owner) = port_owners.get(port) else {
+                return Err(SemanticError::new(format!(
+                    "Cannot yield unknown hardware port `{}`",
+                    port
+                )));
+            };
+
+            if owner != function_name {
+                return Err(SemanticError::new(format!(
+                    "Function `{}` can only yield owned hardware ports; `{}` is owned by `{}`",
+                    function_name, port, owner
+                )));
+            }
+
+            out.entry(handler.clone()).or_default().insert(port.clone());
+
+            for s in body {
+                collect_yield_grants_stmt(s, function_name, port_owners, interrupt_names, out)?;
+            }
+        }
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for s in then_body {
+                collect_yield_grants_stmt(s, function_name, port_owners, interrupt_names, out)?;
+            }
+            for s in else_body {
+                collect_yield_grants_stmt(s, function_name, port_owners, interrupt_names, out)?;
+            }
+        }
+        Stmt::While { body, .. } | Stmt::Repeat { body, .. } | Stmt::CycleContract { body, .. } => {
+            for s in body {
+                collect_yield_grants_stmt(s, function_name, port_owners, interrupt_names, out)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 fn is_execute_stmt_shape_supported(stmt: &Stmt) -> bool {

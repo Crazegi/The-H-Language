@@ -136,6 +136,14 @@ impl Runtime {
                 Ok(Flow::Continue)
             }
             Stmt::PortOwn { .. } | Stmt::PortRef { .. } => Ok(Flow::Continue),
+            Stmt::YieldPort { body, .. } => {
+                for stmt in body {
+                    if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
+                        return Ok(Flow::Return(v));
+                    }
+                }
+                Ok(Flow::Continue)
+            }
             Stmt::Assign { name, expr } => {
                 let value = self.eval_expr(expr, frame)?;
                 self.assign(frame, name, value)?;

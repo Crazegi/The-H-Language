@@ -9,6 +9,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub is_interrupt: bool,
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
 }
@@ -33,6 +34,11 @@ pub enum Stmt {
     RefDecl { name: String, target: String },
     PortOwn { port: String },
     PortRef { port: String },
+    YieldPort {
+        port: String,
+        handler: String,
+        body: Vec<Stmt>,
+    },
     Assign { name: String, expr: Expr },
     Instruction { op: Instruction, target: String, rhs: Expr },
     If {
