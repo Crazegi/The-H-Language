@@ -25,6 +25,7 @@ pub enum Stmt {
         else_body: Vec<Stmt>,
     },
     While { condition: Expr, body: Vec<Stmt> },
+    Repeat { times: Expr, body: Vec<Stmt> },
     PrintBlock(Vec<(String, Expr)>),
     Return(Option<Expr>),
     Expr(Expr),
@@ -46,6 +47,7 @@ pub enum Expr {
     Number(i64),
     String(String),
     Bool(bool),
+    Maybe,
     Var(String),
     Unary { op: UnaryOp, rhs: Box<Expr> },
     Binary {
@@ -59,6 +61,7 @@ pub enum Expr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg,
+    Not,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,4 +77,7 @@ pub enum BinaryOp {
     Lte,
     Gt,
     Gte,
+    And,
+    Or,
+    Xor,
 }

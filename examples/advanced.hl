@@ -1,6 +1,7 @@
 section .data:
   engine_name: "Engine_Temp"
   threshold: 65
+  uncertainty: maybe
 
 section .text:
   fn calibrate(base, delta):
@@ -31,5 +32,18 @@ section .text:
 
     while r1 < 70:
       add r1, 2
+
+    repeat 2:
+      add r1, 1
+
+    own label_upper = upper(engine_name)
+    own has_temp = contains(label_upper, "TEMP")
+    own signal = phase(has_temp, uncertainty)
+
+    print:
+      label: label_upper
+      label_len: len(label_upper)
+      signal: signal
+      stable_gate: collapse(not signal)
 
     return r1

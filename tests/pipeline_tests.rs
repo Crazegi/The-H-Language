@@ -74,3 +74,33 @@ section .text:
     let result = run_program(&program).expect("runtime should pass");
     assert_eq!(result.render(), "7");
 }
+
+#[test]
+fn runs_repeat_and_tristate_logic_features() {
+    let src = r#"section .data:
+  seed: "Pulse"
+
+section .text:
+  fn main() {
+    int n = 0;
+    repeat 3 {
+      add n, 2;
+    }
+
+    string loud = upper(seed);
+    bool has_u = contains(loud, "U");
+    own gate = phase(has_u, maybe);
+    own final = collapse((true xor false) and (not false or gate));
+
+    if (final) {
+      return n;
+    }
+    return 0;
+  }
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "6");
+}

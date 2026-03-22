@@ -176,6 +176,12 @@ impl Parser {
             return Ok(Stmt::While { condition, body });
         }
 
+        if self.match_kind(TokenKind::KeywordRepeat) {
+            let times = self.parse_expression()?;
+            let body = self.parse_block("repeat body")?;
+            return Ok(Stmt::Repeat { times, body });
+        }
+
         if self.match_kind(TokenKind::KeywordPrint) {
             self.expect(TokenKind::Colon, "Expected `:` after `print`")?;
             self.expect(TokenKind::Newline, "Expected newline after `print:`")?;
@@ -309,7 +315,46 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Result<Expr, ParseError> {
-        self.parse_equality()
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_xor()?;
+        while self.match_kind(TokenKind::KeywordOr) {
+            let right = self.parse_xor()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::Or,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_xor(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_and()?;
+        while self.match_kind(TokenKind::KeywordXor) {
+            let right = self.parse_and()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::Xor,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_equality()?;
+        while self.match_kind(TokenKind::KeywordAnd) {
+            let right = self.parse_equality()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::And,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
     }
 
     fn parse_equality(&mut self) -> Result<Expr, ParseError> {
@@ -411,6 +456,14 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        if self.match_kind(TokenKind::KeywordNot) {
+            let rhs = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                rhs: Box::new(rhs),
+            });
+        }
+
         if self.match_kind(TokenKind::Minus) {
             let rhs = self.parse_unary()?;
             return Ok(Expr::Unary {
@@ -434,6 +487,7 @@ impl Parser {
             TokenKind::String => Ok(Expr::String(tok.lexeme)),
             TokenKind::KeywordTrue => Ok(Expr::Bool(true)),
             TokenKind::KeywordFalse => Ok(Expr::Bool(false)),
+            TokenKind::KeywordMaybe => Ok(Expr::Maybe),
             TokenKind::Identifier | TokenKind::Register => {
                 let name = tok.lexeme;
                 if self.match_kind(TokenKind::LParen) {

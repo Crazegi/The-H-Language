@@ -26,13 +26,18 @@ This repository now contains a complete end-to-end prototype for H (`.hl`) in Ru
 - Expressions:
 	- arithmetic: `+ - * / %`
 	- comparisons: `== != < <= > >=`
+	- logic (including tri-state support): `and or xor not`
+	- tri-state literal: `maybe`
 	- function calls inside expressions
 - Builtin math/functions:
 	- `abs(x)`, `sqrt(x)`, `pow(base, exp)`
 	- `min(a, b)`, `max(a, b)`, `clamp(v, lo, hi)`
+	- string helpers: `len(s)`, `upper(s)`, `lower(s)`, `contains(s, part)`
+	- exotic logic helpers: `phase(a, b)`, `collapse(v)`
 - Control flow:
 	- `if/else`
 	- `while`
+	- `repeat n` (counted loop)
 	- `return`
 - Structured native print blocks:
 	- `print:` followed by YAML-style key-value lines

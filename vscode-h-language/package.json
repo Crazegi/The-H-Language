@@ -28,6 +28,10 @@
         "extensions": [
           ".hl"
         ],
+        "icon": {
+          "light": "./icons/h-light.svg",
+          "dark": "./icons/h-dark.svg"
+        },
         "configuration": "./language-configuration.json"
       }
     ],

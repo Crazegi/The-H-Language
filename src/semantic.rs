@@ -131,6 +131,12 @@ fn analyze_stmt(
                 analyze_stmt(s, symbols, refs, data, signatures)?;
             }
         }
+        Stmt::Repeat { times, body } => {
+            analyze_expr(times, symbols, data, signatures)?;
+            for s in body {
+                analyze_stmt(s, symbols, refs, data, signatures)?;
+            }
+        }
         Stmt::PrintBlock(fields) => {
             for (_, expr) in fields {
                 analyze_expr(expr, symbols, data, signatures)?;
@@ -153,7 +159,7 @@ fn analyze_expr(
     signatures: &HashMap<String, usize>,
 ) -> Result<(), SemanticError> {
     match expr {
-        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) => Ok(()),
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe => Ok(()),
         Expr::Var(name) => {
             if symbols.contains(name) || data.contains_key(name) {
                 Ok(())
@@ -211,6 +217,12 @@ fn builtin_arity(name: &str) -> Option<usize> {
         "max" => Some(2),
         "pow" => Some(2),
         "clamp" => Some(3),
+        "len" => Some(1),
+        "upper" => Some(1),
+        "lower" => Some(1),
+        "contains" => Some(2),
+        "phase" => Some(2),
+        "collapse" => Some(1),
         _ => None,
     }
 }

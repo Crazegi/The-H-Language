@@ -146,14 +146,14 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("use std::collections::HashMap;\n\n");
 
     out.push_str("#[derive(Clone, Debug)]\n");
-    out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Ref(String), Unit }\n\n");
+    out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Maybe, Ref(String), Unit }\n\n");
 
     out.push_str("#[derive(Clone, Debug)]\n");
     out.push_str("enum Instruction {\n");
-    out.push_str("  PushInt(i64), PushStr(String), PushBool(bool), PushUnit,\n");
+    out.push_str("  PushInt(i64), PushStr(String), PushBool(bool), PushMaybe, PushUnit,\n");
     out.push_str("  LoadVar(String), DefineVar(String), StoreVar(String), StoreOrDefine(String),\n");
     out.push_str("  DeclareRef { name: String, target: String },\n");
-    out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, Neg, Cmp3,\n");
+    out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, And, Or, Xor, Neg, Not, Cmp3,\n");
     out.push_str("  Jump(usize), JumpIfFalse(usize),\n");
     out.push_str("  Call(String, usize),\n");
     out.push_str("  PrintBegin, PrintField(String), PrintEnd, Pop, Return,\n");
@@ -167,6 +167,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    Value::Int(n) => n.to_string(),\n");
     out.push_str("    Value::Str(s) => format!(\"\\\"{}\\\"\", s),\n");
     out.push_str("    Value::Bool(b) => b.to_string(),\n");
+    out.push_str("    Value::Maybe => \"maybe\".to_string(),\n");
     out.push_str("    Value::Ref(name) => format!(\"&{}\", name),\n");
     out.push_str("    Value::Unit => \"unit\".to_string(),\n");
     out.push_str("  }\n}\n\n");
@@ -174,10 +175,34 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("fn pop(stack: &mut Vec<Value>) -> Result<Value, String> { stack.pop().ok_or_else(|| \"stack underflow\".to_string()) }\n\n");
 
     out.push_str("fn as_int(v: Value) -> Result<i64, String> { match v { Value::Int(n) => Ok(n), _ => Err(\"expected int\".to_string()) } }\n");
-    out.push_str("fn as_bool(v: Value) -> Result<bool, String> { match v { Value::Bool(b) => Ok(b), Value::Int(n) => Ok(n != 0), _ => Err(\"expected bool-compatible value\".to_string()) } }\n\n");
+    out.push_str("fn as_bool(v: Value) -> Result<bool, String> { match v { Value::Bool(b) => Ok(b), Value::Int(n) => Ok(n != 0), Value::Maybe => Ok(false), _ => Err(\"expected bool-compatible value\".to_string()) } }\n\n");
+
+    out.push_str("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n");
+    out.push_str("enum Logic3 { False, Maybe, True }\n\n");
+    out.push_str("fn to_logic(v: &Value) -> Result<Logic3, String> {\n");
+    out.push_str("  match v {\n");
+    out.push_str("    Value::Bool(true) => Ok(Logic3::True),\n");
+    out.push_str("    Value::Bool(false) => Ok(Logic3::False),\n");
+    out.push_str("    Value::Int(n) => Ok(if *n == 0 { Logic3::False } else { Logic3::True }),\n");
+    out.push_str("    Value::Maybe => Ok(Logic3::Maybe),\n");
+    out.push_str("    _ => Err(\"expected logical-compatible value\".to_string()),\n");
+    out.push_str("  }\n}\n\n");
+    out.push_str("fn from_logic(v: Logic3) -> Value {\n");
+    out.push_str("  match v { Logic3::True => Value::Bool(true), Logic3::False => Value::Bool(false), Logic3::Maybe => Value::Maybe }\n}\n\n");
+    out.push_str("fn logic_and(a: Logic3, b: Logic3) -> Logic3 {\n");
+    out.push_str("  match (a, b) { (Logic3::False, _) | (_, Logic3::False) => Logic3::False, (Logic3::True, x) | (x, Logic3::True) => x, (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe }\n}\n\n");
+    out.push_str("fn logic_or(a: Logic3, b: Logic3) -> Logic3 {\n");
+    out.push_str("  match (a, b) { (Logic3::True, _) | (_, Logic3::True) => Logic3::True, (Logic3::False, x) | (x, Logic3::False) => x, (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe }\n}\n\n");
+    out.push_str("fn logic_xor(a: Logic3, b: Logic3) -> Logic3 {\n");
+    out.push_str("  match (a, b) { (Logic3::Maybe, _) | (_, Logic3::Maybe) => Logic3::Maybe, (Logic3::True, Logic3::True) | (Logic3::False, Logic3::False) => Logic3::False, _ => Logic3::True }\n}\n\n");
+    out.push_str("fn logic_phase(a: Logic3, b: Logic3) -> Logic3 { if a == b { a } else { Logic3::Maybe } }\n\n");
 
     out.push_str("fn builtin_int_arg(args: &[Value], idx: usize) -> Result<i64, String> {\n");
     out.push_str("  match args.get(idx) { Some(Value::Int(v)) => Ok(*v), _ => Err(\"expected integer argument\".to_string()) }\n");
+    out.push_str("}\n\n");
+
+    out.push_str("fn builtin_str_arg<'a>(args: &'a [Value], idx: usize) -> Result<&'a str, String> {\n");
+    out.push_str("  match args.get(idx) { Some(Value::Str(v)) => Ok(v.as_str()), _ => Err(\"expected string argument\".to_string()) }\n");
     out.push_str("}\n\n");
 
     out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
@@ -188,6 +213,12 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"max\" => Value::Int(builtin_int_arg(args, 0)?.max(builtin_int_arg(args, 1)?)),\n");
     out.push_str("    \"pow\" => { let base = builtin_int_arg(args, 0)?; let exp = builtin_int_arg(args, 1)?; if exp < 0 { return Err(\"pow exponent must be non-negative\".to_string()); } Value::Int(base.pow(exp as u32)) },\n");
     out.push_str("    \"clamp\" => { let v = builtin_int_arg(args, 0)?; let lo = builtin_int_arg(args, 1)?; let hi = builtin_int_arg(args, 2)?; Value::Int(v.clamp(lo, hi)) },\n");
+    out.push_str("    \"len\" => Value::Int(builtin_str_arg(args, 0)?.chars().count() as i64),\n");
+    out.push_str("    \"upper\" => Value::Str(builtin_str_arg(args, 0)?.to_uppercase()),\n");
+    out.push_str("    \"lower\" => Value::Str(builtin_str_arg(args, 0)?.to_lowercase()),\n");
+    out.push_str("    \"contains\" => Value::Bool(builtin_str_arg(args, 0)?.contains(builtin_str_arg(args, 1)?)),\n");
+    out.push_str("    \"phase\" => { let a = to_logic(args.get(0).ok_or_else(|| \"missing argument\".to_string())?)?; let b = to_logic(args.get(1).ok_or_else(|| \"missing argument\".to_string())?)?; from_logic(logic_phase(a, b)) },\n");
+    out.push_str("    \"collapse\" => { let v = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; Value::Bool(matches!(to_logic(v)?, Logic3::True)) },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");
@@ -206,6 +237,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    (Value::Int(x), Value::Int(y)) => x == y,\n");
     out.push_str("    (Value::Str(x), Value::Str(y)) => x == y,\n");
     out.push_str("    (Value::Bool(x), Value::Bool(y)) => x == y,\n");
+    out.push_str("    (Value::Maybe, Value::Maybe) => true,\n");
     out.push_str("    (Value::Unit, Value::Unit) => true,\n");
     out.push_str("    _ => false,\n");
     out.push_str("  }\n}\n\n");
@@ -237,6 +269,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("      Instruction::PushInt(v) => stack.push(Value::Int(*v)),\n");
     out.push_str("      Instruction::PushStr(v) => stack.push(Value::Str(v.clone())),\n");
     out.push_str("      Instruction::PushBool(v) => stack.push(Value::Bool(*v)),\n");
+    out.push_str("      Instruction::PushMaybe => stack.push(Value::Maybe),\n");
     out.push_str("      Instruction::PushUnit => stack.push(Value::Unit),\n");
     out.push_str("      Instruction::LoadVar(n) => stack.push(resolve(globals, &locals, n)?),\n");
     out.push_str("      Instruction::DefineVar(n) => { let v = pop(&mut stack)?; locals.insert(n.clone(), v); },\n");
@@ -254,7 +287,11 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("      Instruction::Lte => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? != Ordering::Greater)); },\n");
     out.push_str("      Instruction::Gt => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? == Ordering::Greater)); },\n");
     out.push_str("      Instruction::Gte => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? != Ordering::Less)); },\n");
+    out.push_str("      Instruction::And => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_and(to_logic(&l)?, to_logic(&r)?))); },\n");
+    out.push_str("      Instruction::Or => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_or(to_logic(&l)?, to_logic(&r)?))); },\n");
+    out.push_str("      Instruction::Xor => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_xor(to_logic(&l)?, to_logic(&r)?))); },\n");
     out.push_str("      Instruction::Neg => { let v = as_int(pop(&mut stack)?)?; stack.push(Value::Int(-v)); },\n");
+    out.push_str("      Instruction::Not => { let v = pop(&mut stack)?; let out = match to_logic(&v)? { Logic3::True => Logic3::False, Logic3::False => Logic3::True, Logic3::Maybe => Logic3::Maybe }; stack.push(from_logic(out)); },\n");
     out.push_str("      Instruction::Cmp3 => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; let o = cmp_values(&l, &r)?; let mapped = match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 }; stack.push(Value::Int(mapped)); },\n");
     out.push_str("      Instruction::Jump(t) => { ip = *t; continue; },\n");
     out.push_str("      Instruction::JumpIfFalse(t) => { let c = as_bool(pop(&mut stack)?)?; if !c { ip = *t; continue; } },\n");
@@ -331,6 +368,7 @@ fn value_to_rust(value: &Value) -> String {
         Value::Int(v) => format!("Value::Int({})", v),
         Value::Str(v) => format!("Value::Str({:?}.to_string())", v),
         Value::Bool(v) => format!("Value::Bool({})", v),
+        Value::Maybe => "Value::Maybe".to_string(),
         Value::Ref(v) => format!("Value::Ref({:?}.to_string())", v),
         Value::Unit => "Value::Unit".to_string(),
     }
@@ -341,6 +379,7 @@ fn instruction_to_rust(ins: &Instruction) -> String {
         Instruction::PushInt(v) => format!("Instruction::PushInt({})", v),
         Instruction::PushStr(v) => format!("Instruction::PushStr({:?}.to_string())", v),
         Instruction::PushBool(v) => format!("Instruction::PushBool({})", v),
+        Instruction::PushMaybe => "Instruction::PushMaybe".to_string(),
         Instruction::PushUnit => "Instruction::PushUnit".to_string(),
         Instruction::LoadVar(v) => format!("Instruction::LoadVar({:?}.to_string())", v),
         Instruction::DefineVar(v) => format!("Instruction::DefineVar({:?}.to_string())", v),
@@ -363,7 +402,11 @@ fn instruction_to_rust(ins: &Instruction) -> String {
         Instruction::Lte => "Instruction::Lte".to_string(),
         Instruction::Gt => "Instruction::Gt".to_string(),
         Instruction::Gte => "Instruction::Gte".to_string(),
+        Instruction::And => "Instruction::And".to_string(),
+        Instruction::Or => "Instruction::Or".to_string(),
+        Instruction::Xor => "Instruction::Xor".to_string(),
         Instruction::Neg => "Instruction::Neg".to_string(),
+        Instruction::Not => "Instruction::Not".to_string(),
         Instruction::Cmp3 => "Instruction::Cmp3".to_string(),
         Instruction::Jump(v) => format!("Instruction::Jump({})", v),
         Instruction::JumpIfFalse(v) => format!("Instruction::JumpIfFalse({})", v),

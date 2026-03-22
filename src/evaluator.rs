@@ -8,6 +8,7 @@ pub enum Value {
     Int(i64),
     Str(String),
     Bool(bool),
+    Maybe,
     Ref(String),
     Unit,
 }
@@ -171,6 +172,20 @@ impl Runtime {
                 }
                 Ok(Flow::Continue)
             }
+            Stmt::Repeat { times, body } => {
+                let times = self.eval_expr(times, frame)?.as_int()?;
+                if times < 0 {
+                    return Err(RuntimeError::new("repeat expects non-negative count"));
+                }
+                for _ in 0..times {
+                    for stmt in body {
+                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
+                            return Ok(Flow::Return(v));
+                        }
+                    }
+                }
+                Ok(Flow::Continue)
+            }
             Stmt::PrintBlock(fields) => {
                 println!("print:");
                 for (key, expr) in fields {
@@ -251,11 +266,13 @@ impl Runtime {
             Expr::Number(v) => Ok(Value::Int(*v)),
             Expr::String(s) => Ok(Value::Str(s.clone())),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::Maybe => Ok(Value::Maybe),
             Expr::Var(name) => self.resolve_name(frame, name),
             Expr::Unary { op, rhs } => {
                 let value = self.eval_expr(rhs, frame)?;
                 match op {
                     UnaryOp::Neg => Ok(Value::Int(-value.as_int()?)),
+                    UnaryOp::Not => logic_not(value),
                 }
             }
             Expr::Binary { left, op, right } => {
@@ -314,6 +331,13 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, RuntimeErro
             .as_int()
     }
 
+    fn str_arg(args: &[Value], idx: usize) -> Result<&str, RuntimeError> {
+        match args.get(idx) {
+            Some(Value::Str(v)) => Ok(v.as_str()),
+            _ => Err(RuntimeError::new("Expected string argument")),
+        }
+    }
+
     let out = match name {
         "abs" => Value::Int(int_arg(args, 0)?.abs()),
         "sqrt" => {
@@ -339,6 +363,19 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, RuntimeErro
             let hi = int_arg(args, 2)?;
             Value::Int(v.clamp(lo, hi))
         }
+        "len" => Value::Int(str_arg(args, 0)?.chars().count() as i64),
+        "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
+        "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
+        "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
+        "phase" => {
+            let a = to_logic(args.get(0).ok_or_else(|| RuntimeError::new("Missing argument"))?)?;
+            let b = to_logic(args.get(1).ok_or_else(|| RuntimeError::new("Missing argument"))?)?;
+            from_logic(logic_phase(a, b))
+        }
+        "collapse" => {
+            let v = args.get(0).ok_or_else(|| RuntimeError::new("Missing argument"))?;
+            Value::Bool(matches!(to_logic(v)?, Logic3::True))
+        }
         _ => return Ok(None),
     };
 
@@ -355,6 +392,7 @@ fn eval_const_expr(expr: &Expr) -> Result<Value, RuntimeError> {
         Expr::Number(v) => Ok(Value::Int(*v)),
         Expr::String(v) => Ok(Value::Str(v.clone())),
         Expr::Bool(v) => Ok(Value::Bool(*v)),
+        Expr::Maybe => Ok(Value::Maybe),
         _ => Err(RuntimeError::new(
             "Data section currently supports only scalar literals",
         )),
@@ -394,6 +432,87 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> Result<Value, Runtime
         BinaryOp::Gte => Ok(Value::Bool(
             compare_values(&left, &right)? != Ordering::Less,
         )),
+        BinaryOp::And => {
+            let a = to_logic(&left)?;
+            let b = to_logic(&right)?;
+            Ok(from_logic(logic_and(a, b)))
+        }
+        BinaryOp::Or => {
+            let a = to_logic(&left)?;
+            let b = to_logic(&right)?;
+            Ok(from_logic(logic_or(a, b)))
+        }
+        BinaryOp::Xor => {
+            let a = to_logic(&left)?;
+            let b = to_logic(&right)?;
+            Ok(from_logic(logic_xor(a, b)))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Logic3 {
+    False,
+    Maybe,
+    True,
+}
+
+fn to_logic(value: &Value) -> Result<Logic3, RuntimeError> {
+    match value {
+        Value::Bool(true) => Ok(Logic3::True),
+        Value::Bool(false) => Ok(Logic3::False),
+        Value::Int(v) => Ok(if *v == 0 { Logic3::False } else { Logic3::True }),
+        Value::Maybe => Ok(Logic3::Maybe),
+        _ => Err(RuntimeError::new("Expected logical-compatible value")),
+    }
+}
+
+fn from_logic(value: Logic3) -> Value {
+    match value {
+        Logic3::True => Value::Bool(true),
+        Logic3::False => Value::Bool(false),
+        Logic3::Maybe => Value::Maybe,
+    }
+}
+
+fn logic_not(v: Value) -> Result<Value, RuntimeError> {
+    let value = to_logic(&v)?;
+    Ok(from_logic(match value {
+        Logic3::True => Logic3::False,
+        Logic3::False => Logic3::True,
+        Logic3::Maybe => Logic3::Maybe,
+    }))
+}
+
+fn logic_and(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::False, _) | (_, Logic3::False) => Logic3::False,
+        (Logic3::True, x) | (x, Logic3::True) => x,
+        (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe,
+    }
+}
+
+fn logic_or(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::True, _) | (_, Logic3::True) => Logic3::True,
+        (Logic3::False, x) | (x, Logic3::False) => x,
+        (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe,
+    }
+}
+
+fn logic_xor(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::Maybe, _) | (_, Logic3::Maybe) => Logic3::Maybe,
+        (Logic3::True, Logic3::True) | (Logic3::False, Logic3::False) => Logic3::False,
+        _ => Logic3::True,
+    }
+}
+
+fn logic_phase(a: Logic3, b: Logic3) -> Logic3 {
+    if a == b {
+        a
+    } else {
+        Logic3::Maybe
     }
 }
 
@@ -411,6 +530,7 @@ fn equals(left: &Value, right: &Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Maybe, Value::Maybe) => true,
         (Value::Unit, Value::Unit) => true,
         _ => false,
     }
@@ -429,6 +549,7 @@ impl Value {
         match self {
             Value::Bool(v) => Ok(*v),
             Value::Int(v) => Ok(*v != 0),
+            Value::Maybe => Ok(false),
             _ => Err(RuntimeError::new("Expected boolean-compatible value")),
         }
     }
@@ -438,6 +559,7 @@ impl Value {
             Value::Int(v) => v.to_string(),
             Value::Str(v) => format!("\"{}\"", v),
             Value::Bool(v) => v.to_string(),
+            Value::Maybe => "maybe".to_string(),
             Value::Ref(v) => format!("&{}", v),
             Value::Unit => "unit".to_string(),
         }

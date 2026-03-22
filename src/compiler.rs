@@ -60,6 +60,7 @@ pub fn compile_program(program: &Program) -> Result<BytecodeProgram, CompileErro
 #[derive(Default)]
 struct FunctionCompiler {
     code: Vec<Instruction>,
+    temp_counter: usize,
 }
 
 impl FunctionCompiler {
@@ -168,6 +169,31 @@ impl FunctionCompiler {
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
             }
+            Stmt::Repeat { times, body } => {
+                self.compile_expr(times)?;
+                let counter_name = self.next_temp("repeat_counter");
+                self.code.push(Instruction::DefineVar(counter_name.clone()));
+
+                let loop_start = self.code.len();
+                self.code.push(Instruction::LoadVar(counter_name.clone()));
+                self.code.push(Instruction::PushInt(0));
+                self.code.push(Instruction::Gt);
+                let jump_if_false_pos = self.code.len();
+                self.code.push(Instruction::JumpIfFalse(usize::MAX));
+
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
+
+                self.code.push(Instruction::LoadVar(counter_name.clone()));
+                self.code.push(Instruction::PushInt(1));
+                self.code.push(Instruction::Sub);
+                self.code.push(Instruction::StoreVar(counter_name));
+                self.code.push(Instruction::Jump(loop_start));
+
+                let loop_end = self.code.len();
+                self.patch_jump(jump_if_false_pos, loop_end)?;
+            }
             Stmt::PrintBlock(fields) => {
                 self.code.push(Instruction::PrintBegin);
                 for (key, expr) in fields {
@@ -196,11 +222,13 @@ impl FunctionCompiler {
             Expr::Number(v) => self.code.push(Instruction::PushInt(*v)),
             Expr::String(v) => self.code.push(Instruction::PushStr(v.clone())),
             Expr::Bool(v) => self.code.push(Instruction::PushBool(*v)),
+            Expr::Maybe => self.code.push(Instruction::PushMaybe),
             Expr::Var(v) => self.code.push(Instruction::LoadVar(v.clone())),
             Expr::Unary { op, rhs } => {
                 self.compile_expr(rhs)?;
                 match op {
                     UnaryOp::Neg => self.code.push(Instruction::Neg),
+                    UnaryOp::Not => self.code.push(Instruction::Not),
                 }
             }
             Expr::Binary { left, op, right } => {
@@ -218,6 +246,9 @@ impl FunctionCompiler {
                     BinaryOp::Lte => Instruction::Lte,
                     BinaryOp::Gt => Instruction::Gt,
                     BinaryOp::Gte => Instruction::Gte,
+                    BinaryOp::And => Instruction::And,
+                    BinaryOp::Or => Instruction::Or,
+                    BinaryOp::Xor => Instruction::Xor,
                 });
             }
             Expr::Call { name, args } => {
@@ -245,6 +276,12 @@ impl FunctionCompiler {
             )),
         }
     }
+
+    fn next_temp(&mut self, prefix: &str) -> String {
+        let name = format!("__{}_{}", prefix, self.temp_counter);
+        self.temp_counter += 1;
+        name
+    }
 }
 
 fn const_expr_to_value(expr: &Expr) -> Result<Value, CompileError> {
@@ -252,6 +289,7 @@ fn const_expr_to_value(expr: &Expr) -> Result<Value, CompileError> {
         Expr::Number(v) => Ok(Value::Int(*v)),
         Expr::String(v) => Ok(Value::Str(v.clone())),
         Expr::Bool(v) => Ok(Value::Bool(*v)),
+        Expr::Maybe => Ok(Value::Maybe),
         _ => Err(CompileError::new(
             "Data section supports only literal constants in compiled mode",
         )),

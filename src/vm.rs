@@ -79,6 +79,7 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
             Instruction::PushInt(v) => frame.stack.push(Value::Int(*v)),
             Instruction::PushStr(v) => frame.stack.push(Value::Str(v.clone())),
             Instruction::PushBool(v) => frame.stack.push(Value::Bool(*v)),
+            Instruction::PushMaybe => frame.stack.push(Value::Maybe),
             Instruction::PushUnit => frame.stack.push(Value::Unit),
             Instruction::LoadVar(name) => {
                 let v = resolve_name(program, &frame.locals, name)?;
@@ -154,9 +155,36 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
             Instruction::Lte => cmp_push_lte(&mut frame.stack)?,
             Instruction::Gt => cmp_push(&mut frame.stack, Ordering::Greater)?,
             Instruction::Gte => cmp_push_gte(&mut frame.stack)?,
+            Instruction::And => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                let out = logic_and(to_logic(&l)?, to_logic(&r)?);
+                frame.stack.push(from_logic(out));
+            }
+            Instruction::Or => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                let out = logic_or(to_logic(&l)?, to_logic(&r)?);
+                frame.stack.push(from_logic(out));
+            }
+            Instruction::Xor => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                let out = logic_xor(to_logic(&l)?, to_logic(&r)?);
+                frame.stack.push(from_logic(out));
+            }
             Instruction::Neg => {
                 let v = as_int(pop(&mut frame.stack)?)?;
                 frame.stack.push(Value::Int(-v));
+            }
+            Instruction::Not => {
+                let v = pop(&mut frame.stack)?;
+                let out = match to_logic(&v)? {
+                    Logic3::True => Logic3::False,
+                    Logic3::False => Logic3::True,
+                    Logic3::Maybe => Logic3::Maybe,
+                };
+                frame.stack.push(from_logic(out));
             }
             Instruction::Cmp3 => {
                 let r = pop(&mut frame.stack)?;
@@ -220,6 +248,13 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, VmError> {
         }
     }
 
+    fn str_arg<'a>(args: &'a [Value], idx: usize) -> Result<&'a str, VmError> {
+        match args.get(idx) {
+            Some(Value::Str(v)) => Ok(v.as_str()),
+            _ => Err(VmError::new("Expected string argument")),
+        }
+    }
+
     let out = match name {
         "abs" => Value::Int(int_arg(args, 0)?.abs()),
         "sqrt" => {
@@ -244,6 +279,19 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, VmError> {
             let lo = int_arg(args, 1)?;
             let hi = int_arg(args, 2)?;
             Value::Int(v.clamp(lo, hi))
+        }
+        "len" => Value::Int(str_arg(args, 0)?.chars().count() as i64),
+        "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
+        "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
+        "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
+        "phase" => {
+            let a = to_logic(args.get(0).ok_or_else(|| VmError::new("Missing argument"))?)?;
+            let b = to_logic(args.get(1).ok_or_else(|| VmError::new("Missing argument"))?)?;
+            from_logic(logic_phase(a, b))
+        }
+        "collapse" => {
+            let v = args.get(0).ok_or_else(|| VmError::new("Missing argument"))?;
+            Value::Bool(matches!(to_logic(v)?, Logic3::True))
         }
         _ => return Ok(None),
     };
@@ -300,7 +348,65 @@ fn as_bool(v: Value) -> Result<bool, VmError> {
     match v {
         Value::Bool(b) => Ok(b),
         Value::Int(n) => Ok(n != 0),
+        Value::Maybe => Ok(false),
         _ => Err(VmError::new("Expected boolean-compatible value")),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Logic3 {
+    False,
+    Maybe,
+    True,
+}
+
+fn to_logic(v: &Value) -> Result<Logic3, VmError> {
+    match v {
+        Value::Bool(true) => Ok(Logic3::True),
+        Value::Bool(false) => Ok(Logic3::False),
+        Value::Int(n) => Ok(if *n == 0 { Logic3::False } else { Logic3::True }),
+        Value::Maybe => Ok(Logic3::Maybe),
+        _ => Err(VmError::new("Expected logical-compatible value")),
+    }
+}
+
+fn from_logic(v: Logic3) -> Value {
+    match v {
+        Logic3::True => Value::Bool(true),
+        Logic3::False => Value::Bool(false),
+        Logic3::Maybe => Value::Maybe,
+    }
+}
+
+fn logic_and(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::False, _) | (_, Logic3::False) => Logic3::False,
+        (Logic3::True, x) | (x, Logic3::True) => x,
+        (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe,
+    }
+}
+
+fn logic_or(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::True, _) | (_, Logic3::True) => Logic3::True,
+        (Logic3::False, x) | (x, Logic3::False) => x,
+        (Logic3::Maybe, Logic3::Maybe) => Logic3::Maybe,
+    }
+}
+
+fn logic_xor(a: Logic3, b: Logic3) -> Logic3 {
+    match (a, b) {
+        (Logic3::Maybe, _) | (_, Logic3::Maybe) => Logic3::Maybe,
+        (Logic3::True, Logic3::True) | (Logic3::False, Logic3::False) => Logic3::False,
+        _ => Logic3::True,
+    }
+}
+
+fn logic_phase(a: Logic3, b: Logic3) -> Logic3 {
+    if a == b {
+        a
+    } else {
+        Logic3::Maybe
     }
 }
 
@@ -350,6 +456,7 @@ fn equals(left: &Value, right: &Value) -> bool {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Maybe, Value::Maybe) => true,
         (Value::Unit, Value::Unit) => true,
         _ => false,
     }
