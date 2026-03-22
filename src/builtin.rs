@@ -10,6 +10,12 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
     match name {
         "abs" => Some(1),
         "sqrt" => Some(1),
+        "floor" => Some(1),
+        "ceil" => Some(1),
+        "log2" => Some(1),
+        "sin" => Some(1),
+        "cos" => Some(1),
+        "tan" => Some(1),
         "min" => Some(2),
         "max" => Some(2),
         "pow" => Some(2),
@@ -18,6 +24,8 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "upper" => Some(1),
         "lower" => Some(1),
         "contains" => Some(2),
+        "split" => Some(2),
+        "join" => Some(2),
         "phase" => Some(2),
         "collapse" => Some(1),
         "sleep_until" => Some(1),
@@ -32,9 +40,25 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "delete_file" => Some(1),
         "env" => Some(1),
         "to_int" => Some(1),
+        "to_bool" => Some(1),
+        "to_float" => Some(1),
         "to_string" => Some(1),
+        "to_float_string" => Some(1),
         "trim" => Some(1),
         "replace" => Some(3),
+        "array_new" => Some(0),
+        "array_len" => Some(1),
+        "array_push" => Some(2),
+        "array_get" => Some(2),
+        "queue_new" => Some(0),
+        "queue_len" => Some(1),
+        "queue_push" => Some(2),
+        "queue_peek" => Some(1),
+        "queue_pop" => Some(1),
+        "ring_new" => Some(1),
+        "ring_len" => Some(1),
+        "ring_push" => Some(2),
+        "ring_peek" => Some(1),
         "window_loop" => Some(2),
         "menu" => Some(2),
         "http_get" => Some(1),
@@ -83,6 +107,31 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             }
             Value::Int((n as f64).sqrt().floor() as i64)
         }
+        "floor" => Value::Int(int_arg(args, 0)?),
+        "ceil" => Value::Int(int_arg(args, 0)?),
+        "log2" => {
+            let n = int_arg(args, 0)?;
+            if n <= 0 {
+                return Err("log2 expects positive integer".to_string());
+            }
+            Value::Int((i64::BITS - 1 - n.leading_zeros()) as i64)
+        }
+        "sin" => {
+            let deg = int_arg(args, 0)?;
+            Value::Int((deg_to_rad(deg).sin() * 1000.0).round() as i64)
+        }
+        "cos" => {
+            let deg = int_arg(args, 0)?;
+            Value::Int((deg_to_rad(deg).cos() * 1000.0).round() as i64)
+        }
+        "tan" => {
+            let deg = int_arg(args, 0)?;
+            let cos = deg_to_rad(deg).cos();
+            if cos.abs() < 1e-9 {
+                return Err("tan is undefined for this angle".to_string());
+            }
+            Value::Int((deg_to_rad(deg).tan() * 1000.0).round() as i64)
+        }
         "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
         "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
         "pow" => {
@@ -103,6 +152,24 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
         "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
         "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
         "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
+        "split" => {
+            let source = str_arg(args, 0)?;
+            let delimiter = str_arg(args, 1)?;
+            if delimiter.is_empty() {
+                return Err("split expects non-empty delimiter".to_string());
+            }
+            Value::Str(
+                source
+                    .split(delimiter)
+                    .collect::<Vec<_>>()
+                    .join(SEQ_SEPARATOR_STR),
+            )
+        }
+        "join" => {
+            let sequence = str_arg(args, 0)?;
+            let delimiter = str_arg(args, 1)?;
+            Value::Str(sequence_items(sequence).join(delimiter))
+        }
         "phase" => {
             let a = logic_arg(args, 0)?;
             let b = logic_arg(args, 1)?;
@@ -218,11 +285,29 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
                 .map_err(|e| format!("to_int parse failed: {}", e))?;
             Value::Int(parsed)
         }
+        "to_bool" => {
+            let raw = str_arg(args, 0)?.trim().to_ascii_lowercase();
+            let parsed = match raw.as_str() {
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                _ => return Err("to_bool parse failed: expected true/false-like string".to_string()),
+            };
+            Value::Bool(parsed)
+        }
+        "to_float" => {
+            let raw = str_arg(args, 0)?;
+            let scaled = parse_scaled_thousand(raw)?;
+            Value::Int(scaled)
+        }
         "to_string" => {
             let value = args
                 .get(0)
                 .ok_or_else(|| "Missing argument".to_string())?;
             Value::Str(value_to_string(value))
+        }
+        "to_float_string" => {
+            let scaled = int_arg(args, 0)?;
+            Value::Str(format_scaled_thousand(scaled))
         }
         "trim" => Value::Str(str_arg(args, 0)?.trim().to_string()),
         "replace" => {
@@ -230,6 +315,76 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             let from = str_arg(args, 1)?;
             let to = str_arg(args, 2)?;
             Value::Str(source.replace(from, to))
+        }
+        "array_new" => Value::Str(String::new()),
+        "array_len" => Value::Int(sequence_items(str_arg(args, 0)?).len() as i64),
+        "array_push" => {
+            let sequence = str_arg(args, 0)?;
+            let item = str_arg(args, 1)?;
+            Value::Str(push_sequence_item(sequence, item))
+        }
+        "array_get" => {
+            let sequence = str_arg(args, 0)?;
+            let idx = int_arg(args, 1)?;
+            if idx < 0 {
+                return Err("array_get expects non-negative index".to_string());
+            }
+            match sequence_items(sequence).get(idx as usize) {
+                Some(v) => Value::Str(v.clone()),
+                None => Value::Maybe,
+            }
+        }
+        "queue_new" => Value::Str(String::new()),
+        "queue_len" => Value::Int(sequence_items(str_arg(args, 0)?).len() as i64),
+        "queue_push" => {
+            let sequence = str_arg(args, 0)?;
+            let item = str_arg(args, 1)?;
+            Value::Str(push_sequence_item(sequence, item))
+        }
+        "queue_peek" => {
+            let sequence = str_arg(args, 0)?;
+            match sequence_items(sequence).first() {
+                Some(v) => Value::Str(v.clone()),
+                None => Value::Maybe,
+            }
+        }
+        "queue_pop" => {
+            let sequence = str_arg(args, 0)?;
+            let mut items = sequence_items(sequence);
+            if !items.is_empty() {
+                items.remove(0);
+            }
+            Value::Str(items.join(SEQ_SEPARATOR_STR))
+        }
+        "ring_new" => {
+            let cap = int_arg(args, 0)?;
+            if cap <= 0 {
+                return Err("ring_new expects capacity > 0".to_string());
+            }
+            Value::Str(format!("{}{}", cap, RING_CAP_SEPARATOR))
+        }
+        "ring_len" => {
+            let ring = str_arg(args, 0)?;
+            let (_, items) = parse_ring(ring)?;
+            Value::Int(items.len() as i64)
+        }
+        "ring_push" => {
+            let ring = str_arg(args, 0)?;
+            let item = str_arg(args, 1)?;
+            let (capacity, mut items) = parse_ring(ring)?;
+            items.push(item.to_string());
+            while items.len() > capacity as usize {
+                items.remove(0);
+            }
+            Value::Str(format_ring(capacity, &items))
+        }
+        "ring_peek" => {
+            let ring = str_arg(args, 0)?;
+            let (_, items) = parse_ring(ring)?;
+            match items.first() {
+                Some(v) => Value::Str(v.clone()),
+                None => Value::Maybe,
+            }
         }
         "window_loop" => {
             let title = str_arg(args, 0)?;
@@ -401,6 +556,83 @@ fn shell_command(command: &str) -> Command {
         cmd.arg("-c").arg(command);
         cmd
     }
+}
+
+const SEQ_SEPARATOR: char = '\u{001f}';
+const SEQ_SEPARATOR_STR: &str = "\u{001f}";
+const RING_CAP_SEPARATOR: char = '#';
+
+fn sequence_items(sequence: &str) -> Vec<String> {
+    if sequence.is_empty() {
+        Vec::new()
+    } else {
+        sequence
+            .split(SEQ_SEPARATOR)
+            .map(|s| s.to_string())
+            .collect()
+    }
+}
+
+fn push_sequence_item(sequence: &str, item: &str) -> String {
+    if sequence.is_empty() {
+        item.to_string()
+    } else {
+        format!("{}{}{}", sequence, SEQ_SEPARATOR, item)
+    }
+}
+
+fn deg_to_rad(degrees: i64) -> f64 {
+    (degrees as f64).to_radians()
+}
+
+fn parse_scaled_thousand(raw: &str) -> Result<i64, String> {
+    let parsed = raw
+        .trim()
+        .parse::<f64>()
+        .map_err(|e| format!("to_float parse failed: {}", e))?;
+    let scaled = parsed * 1000.0;
+    if !scaled.is_finite() {
+        return Err("to_float parse failed: value is not finite".to_string());
+    }
+    if scaled < i64::MIN as f64 || scaled > i64::MAX as f64 {
+        return Err("to_float parse failed: value out of range".to_string());
+    }
+    Ok(scaled.round() as i64)
+}
+
+fn format_scaled_thousand(value: i64) -> String {
+    let negative = value < 0;
+    let abs = value.unsigned_abs();
+    let whole = abs / 1000;
+    let frac = abs % 1000;
+    if negative {
+        format!("-{}.{:03}", whole, frac)
+    } else {
+        format!("{}.{:03}", whole, frac)
+    }
+}
+
+fn parse_ring(raw: &str) -> Result<(i64, Vec<String>), String> {
+    let mut parts = raw.splitn(2, RING_CAP_SEPARATOR);
+    let cap_part = parts.next().unwrap_or_default().trim();
+    let payload = parts.next().unwrap_or_default();
+
+    if cap_part.is_empty() {
+        return Err("ring value is invalid: missing capacity".to_string());
+    }
+
+    let capacity = cap_part
+        .parse::<i64>()
+        .map_err(|e| format!("ring value is invalid: {}", e))?;
+    if capacity <= 0 {
+        return Err("ring value is invalid: capacity must be > 0".to_string());
+    }
+
+    Ok((capacity, sequence_items(payload)))
+}
+
+fn format_ring(capacity: i64, items: &[String]) -> String {
+    format!("{}{}{}", capacity, RING_CAP_SEPARATOR, items.join(SEQ_SEPARATOR_STR))
 }
 
 fn escape_json_string(input: &str) -> String {

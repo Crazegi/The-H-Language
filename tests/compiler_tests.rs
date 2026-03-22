@@ -197,6 +197,57 @@ fn vm_executes_scripting_library_builtins() {
 }
 
 #[test]
+fn vm_executes_core_stdlib_math_collections_string_convert() {
+    let src = r#"section .text:
+  fn main():
+    own arr = array_new()
+    arr = array_push(arr, "red")
+    arr = array_push(arr, "blue")
+    own arr_n = array_len(arr)
+    own second = array_get(arr, 1)
+    own joined = join(arr, ",")
+
+    own parts = split("a,b,c", ",")
+    own parts_n = array_len(parts)
+
+    own q = queue_new()
+    q = queue_push(q, "job1")
+    q = queue_push(q, "job2")
+    own head = queue_peek(q)
+    q = queue_pop(q)
+    own q_n = queue_len(q)
+
+    own ring = ring_new(2)
+    ring = ring_push(ring, "x")
+    ring = ring_push(ring, "y")
+    ring = ring_push(ring, "z")
+    own ring_head = ring_peek(ring)
+    own ring_n = ring_len(ring)
+
+    own lg = log2(16)
+    own s = sin(30)
+    own c = cos(60)
+    own t = tan(45)
+    own f = floor(7)
+    own ce = ceil(7)
+
+    own b = to_bool("true")
+    own fp = to_float("12.345")
+    own fp_s = to_float_string(fp)
+
+    if arr_n == 2 and second == "blue" and joined == "red,blue" and parts_n == 3 and head == "job1" and q_n == 1 and ring_head == "y" and ring_n == 2 and lg == 4 and s >= 499 and s <= 501 and c >= 499 and c <= 501 and t >= 999 and t <= 1001 and f == 7 and ce == 7 and b and fp == 12345 and fp_s == "12.345":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():

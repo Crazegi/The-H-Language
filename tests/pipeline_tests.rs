@@ -136,6 +136,48 @@ fn parses_and_runs_cycle_contract_execute_block() {
 }
 
 #[test]
+fn parses_and_runs_core_stdlib_math_collections_string_convert() {
+    let src = r#"section .text:
+  fn main():
+    own arr = array_new()
+    arr = array_push(arr, "alpha")
+    arr = array_push(arr, "beta")
+    own second = array_get(arr, 1)
+
+    own q = queue_new()
+    q = queue_push(q, "A")
+    q = queue_push(q, "B")
+    own first_q = queue_peek(q)
+    q = queue_pop(q)
+
+    own ring = ring_new(2)
+    ring = ring_push(ring, "one")
+    ring = ring_push(ring, "two")
+    ring = ring_push(ring, "three")
+
+    own pieces = split("x|y|z", "|")
+    own rebuilt = join(pieces, "-")
+
+    own lg = log2(8)
+    own s = sin(30)
+    own c = cos(60)
+    own t = tan(45)
+    own b = to_bool("on")
+    own fp = to_float("2.500")
+    own fp_s = to_float_string(fp)
+
+    if second == "beta" and first_q == "A" and queue_len(q) == 1 and ring_peek(ring) == "two" and ring_len(ring) == 2 and rebuilt == "x-y-z" and lg == 3 and s >= 499 and s <= 501 and c >= 499 and c <= 501 and t >= 999 and t <= 1001 and b and fp == 2500 and fp_s == "2.500":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn rejects_invalid_cycle_contract_policy() {
     let src = r#"section .text:
   fn main():

@@ -48,15 +48,17 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Expressions: arithmetic, comparison, bitwise (`&`, `|`, `<<`, `>>`), call expressions
 - Tri-state logic: `true`, `false`, `maybe`, `and`, `or`, `xor`, `not`
 - Builtins:
-  - math: `abs`, `sqrt`, `pow`, `min`, `max`, `clamp`
-  - string: `len`, `upper`, `lower`, `contains`
+  - math: `abs`, `sqrt`, `floor`, `ceil`, `log2`, `sin`, `cos`, `tan`, `pow`, `min`, `max`, `clamp`
+    - `sin/cos/tan` use integer degree input and return fixed-point milli-units (`1000 == 1.0`)
+  - collections (string-encoded): `array_new`, `array_len`, `array_push`, `array_get`, `queue_new`, `queue_len`, `queue_push`, `queue_peek`, `queue_pop`, `ring_new`, `ring_len`, `ring_push`, `ring_peek`
+  - string: `len`, `upper`, `lower`, `contains`, `split`, `join`
   - logic: `phase`, `collapse`
   - hardware: `sleep_until(interrupt)`
   - desktop:
     - input: `input(prompt)`
     - file I/O: `read_text`, `write_text`, `append_text`, `exists`, `delete_file`
     - time/random: `sleep_ms`, `now_ms`, `rand_int`
-    - utilities: `env`, `to_int`, `to_string`, `trim`, `replace`
+    - utilities: `env`, `to_int`, `to_bool`, `to_float`, `to_string`, `to_float_string`, `trim`, `replace`
     - starter API scaffold: `window_loop`, `menu`, `http_get`, `json_parse`
   - scripting library:
     - process args: `script_args_count`, `script_arg`
