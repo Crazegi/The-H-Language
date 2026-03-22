@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 use hl_lexer::{
     analyze, compile_h_to_native_artifacts_with_options, compile_program_with_options,
-    disassemble, parse_source, render_contract_report_text, run_bytecode, run_program,
-    CompileOptions, CycleProfile, Lexer, OptimizationLevel, TokenKind,
+    disassemble, parse_source, read_package, render_contract_report_text, run_bytecode,
+    run_program, write_package, CompileOptions, CycleProfile, Lexer, OptimizationLevel,
+    TokenKind,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -51,6 +52,8 @@ enum Mode {
     Tokens,
     Ast,
     Compile,
+    Pack,
+    RunPackage,
     Vm,
     Native,
 }
@@ -74,6 +77,8 @@ fn main() {
             "--tokens" => mode = Mode::Tokens,
             "--ast" => mode = Mode::Ast,
             "--compile" => mode = Mode::Compile,
+            "--pack" => mode = Mode::Pack,
+            "--run-package" => mode = Mode::RunPackage,
             "--vm" => mode = Mode::Vm,
             "--native" => mode = Mode::Native,
             "--out" => {
@@ -226,6 +231,87 @@ fn main() {
                     std::process::exit(1);
                 }
                 println!("contract_report: {}", path);
+            }
+        }
+        Mode::Pack => {
+            let program = match parse_source(&input) {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("Parse error: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            if let Err(err) = analyze(&program) {
+                eprintln!("Semantic error: {}", err);
+                std::process::exit(1);
+            }
+
+            let compiled = match compile_program_with_options(&program, compile_options.clone()) {
+                Ok(bc) => bc,
+                Err(err) => {
+                    eprintln!("Compile error: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            let out = match out_path {
+                Some(path) => PathBuf::from(path),
+                None => {
+                    let mut default_name = match input_path {
+                        Some(p) => {
+                            let stem = std::path::Path::new(&p)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("program");
+                            PathBuf::from(stem)
+                        }
+                        None => PathBuf::from("program"),
+                    };
+                    default_name.set_extension("hbcp");
+                    default_name
+                }
+            };
+
+            if let Err(err) = write_package(&compiled.bytecode, &out) {
+                eprintln!("Package error: {}", err);
+                std::process::exit(1);
+            }
+
+            if let Some(path) = contract_report_out.as_ref() {
+                let text = render_contract_report_text(&compiled.contract_reports);
+                if let Err(err) = fs::write(path, text) {
+                    eprintln!("Failed to write {}: {}", path, err);
+                    std::process::exit(1);
+                }
+                println!("contract_report: {}", path);
+            }
+
+            println!("package_output: {}", out.display());
+        }
+        Mode::RunPackage => {
+            let package_path = match input_path {
+                Some(p) => PathBuf::from(p),
+                None => {
+                    eprintln!("Expected a package path for --run-package");
+                    std::process::exit(1);
+                }
+            };
+
+            let bytecode = match read_package(&package_path) {
+                Ok(p) => p,
+                Err(err) => {
+                    eprintln!("Package error: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            match run_bytecode(&bytecode) {
+                Ok(value) => println!("program_return: {}", value.render()),
+                Err(err) => {
+                    eprintln!("VM error: {}", err);
+                    std::process::exit(1);
+                }
             }
         }
         Mode::Vm => {

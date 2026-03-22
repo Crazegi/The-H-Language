@@ -180,6 +180,29 @@ Native mode emits:
 - object file (`.obj` on Windows, `.o` elsewhere)
 - linked executable
 
+### Rewrite Phase: Rust-Toolchain-Independent Packaging
+
+This workflow avoids the rustc native backend path:
+1. Compile source to bytecode package (`.hbcp`).
+2. Run the package directly with the VM runtime.
+
+Create package:
+
+```powershell
+cargo run --bin hl-lex -- --pack examples/cycle_contracts.hl --opt-level 3 --cycle-profile generic --contract-report pkg_report.txt --out cycle.hbcp
+```
+
+Run package:
+
+```powershell
+cargo run --bin hl-lex -- --run-package cycle.hbcp
+```
+
+Why this exists:
+- no rustc invocation in the compile/distribution path
+- fast deployment artifact for CI and test benches
+- deterministic bytecode payload that can be transported across environments
+
 ### Tests
 
 ```powershell
