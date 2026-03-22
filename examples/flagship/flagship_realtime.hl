@@ -1,0 +1,120 @@
+section .data:
+  demo_name: "H-FLAGSHIP-RT"
+  profile_hint: "generic|avr-like|cortex-m0-like"
+  uncertainty: maybe
+
+section .text:
+  import math
+  import gpio
+  import script
+  import timer
+  import watchdog
+
+  struct RunReport:
+    rpm: int
+    temp: int
+    status: string
+
+  interrupt fn irq_tick():
+    print:
+      event: "irq_tick"
+      note: "shared port window"
+    return
+
+  fn io_realtime_core(seed):
+    own [port_a]
+    own r1 = seed
+    own r2 = 3
+
+    contract:
+      cycles: 6
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mul r1, r2
+      mov [port_a], r1
+
+    yield [port_a] to irq_tick:
+      mov [port_a], r1
+      add r1, 1
+      mov [port_a], r1
+
+    contract:
+      cycles: 3
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mul r1, r2
+      mov [port_a], r1
+
+    return r1
+
+  fn score_capture_lines(text):
+    own lines = split_lines(text)
+    own kept = 0
+    own chars = 0
+    for line in lines:
+      if len(line) == 0:
+        continue
+      add kept, 1
+      add chars, len(line)
+      if kept == 4:
+        break
+    own packed = format("{}:{}", kept, chars)
+    return packed
+
+  fn main():
+    own timer0 = timer.new("rt_loop", 2000)
+    unused own timer_started = timer.start(timer0, 8)
+    own wd = watchdog.new("wd_rt", 500)
+    unused own wd_fed = watchdog.feed(wd)
+
+    own rpm = io_realtime_core(5)
+
+    own temp = 64
+    while temp < 92:
+      add temp, 4
+      if temp == 76:
+        continue
+      if temp > 88:
+        break
+
+    own status = "nominal"
+    if temp > 85:
+      status = "hot"
+
+    own report = RunReport(rpm, temp, status)
+    own snapped = math.snap(report.temp, 5)
+    own heading = math.atan2(1, 0)
+
+    own msg = format("{} profile_hint={} rpm={} temp={} heading={} status={}", demo_name, profile_hint, report.rpm, snapped, heading, report.status)
+    own cmd = format("echo {}", msg)
+    own captured = script.run_capture_lines(cmd)
+    own packed = score_capture_lines(captured)
+    own parts = split(packed, ":")
+    own line_count = to_int(array_get(parts, 0))
+    own char_count = to_int(array_get(parts, 1))
+
+    own pin = gpio.claim("[port_a]")
+    unused own pin_cfg = gpio.mode(pin, "out")
+    own wrote = gpio.write(pin, 1)
+
+    own tri = phase(line_count > 0 and wrote, uncertainty)
+    own stable = collapse(not tri)
+
+    own score = report.rpm
+    add score, line_count
+    add score, char_count
+
+    print:
+      demo: "flagship-rt"
+      profile_hint: profile_hint
+      status: report.status
+      stable: stable
+      tri: tri
+      rpm: report.rpm
+      temp: report.temp
+      score: score
+
+    return score

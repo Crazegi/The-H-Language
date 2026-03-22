@@ -653,6 +653,8 @@ cargo run --bin hl-lex -- --profile-doctor examples/cycle_contracts.hl --cycle-p
 - Basic language example: `examples/sample.hl`
 - Rich feature example: `examples/advanced.hl`
 - Dedicated Cycle Contracts showcase: `examples/cycle_contracts.hl`
+- Flagship end-to-end showcase: `examples/flagship/flagship.hl`
+- Special-folder hard real-time flagship: `examples/flagship/flagship_realtime.hl`
 
 Use the contracts showcase to compare profiles on the same source:
 

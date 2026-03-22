@@ -1,0 +1,218 @@
+section .data:
+  build_label: "H-FLAGSHIP"
+  target_profile: "generic"
+  uncertainty: maybe
+  min_samples: 1
+  max_samples: 12
+
+section .text:
+  import math
+  import script
+  import gpio
+  import timer
+  import watchdog
+
+  struct Telemetry:
+    rpm: int
+    temp: int
+    status: string
+
+  interrupt fn irq_guard():
+    print:
+      event: "irq_guard"
+      note: "interrupt grant consumed"
+    return
+
+  fn deterministic_window(base, delta):
+    own r1 = base
+    own r2 = delta
+    ref [port_a]
+    contract:
+      cycles: 5
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mul r1, r2
+      mov [port_a], r1
+    return r1
+
+  fn shared_irq_window(seed):
+    own [port_a]
+    own r1 = seed
+    yield [port_a] to irq_guard:
+      mov [port_a], r1
+      add r1, 1
+      mov [port_a], r1
+    return r1
+
+  fn render_status(rpm, temp, status):
+    own snapped_temp = math.snap(temp, 5)
+    own heading = math.atan2(1, 1)
+    own gate = phase(temp > 80, uncertainty)
+    own stable = collapse(not gate)
+    own line = format("{} profile={} rpm={} temp={} heading={} status={} stable={}", build_label, target_profile, rpm, snapped_temp, heading, status, stable)
+    return line
+
+  fn summarize_lines(text):
+    own lines = split_lines(text)
+    own count = 0
+    own total_chars = 0
+    for line in lines:
+      if len(line) == 0:
+        continue
+      add count, 1
+      add total_chars, len(line)
+      if count == 3:
+        break
+    own packed = format("{}:{}", count, total_chars)
+    return packed
+
+  fn ask_int(prompt, fallback):
+    own raw = input(prompt)
+    own cleaned = trim(raw)
+    if len(cleaned) == 0:
+      return fallback
+    return to_int(cleaned)
+
+  fn clamp_samples(n):
+    own value = n
+    if value < min_samples:
+      value = min_samples
+    if value > max_samples:
+      value = max_samples
+    return value
+
+  fn classify_health(temp, avg_temp, jitter):
+    if temp >= 90 or avg_temp >= 86:
+      return "critical"
+    if temp >= 80 or jitter >= 8:
+      return "warning"
+    return "nominal"
+
+  fn compute_rpm(seed):
+    own rpm = deterministic_window(seed, 2)
+    own bus = shared_irq_window(4)
+    add rpm, bus
+    return rpm
+
+  fn compute_temp():
+    own temp = 67
+    while temp < 88:
+      add temp, 3
+      if temp == 79:
+        continue
+      if temp > 86:
+        break
+    return temp
+
+  fn compute_status(temp):
+    own status = "nominal"
+    if temp > 85:
+      status = "hot"
+    return status
+
+  fn main():
+    own timestamp_ms = now_ms()
+    own cwd = script.cwd()
+    own args_n = script.args_count()
+    own os_name = env("OS")
+
+    own operator = input("operator id: ")
+    own samples_req = ask_int("sample count (1..12): ", 6)
+    own base_seed = ask_int("base seed (1..50): ", 10)
+
+    own sample_count = clamp_samples(samples_req)
+    own seed = base_seed
+    if seed < 1:
+      seed = 1
+    if seed > 50:
+      seed = 50
+
+    own rpm = compute_rpm(10)
+    own temp = compute_temp()
+
+    own sample_idx = 0
+    own sum_temp = 0
+    own min_temp = 9999
+    own max_temp = -9999
+    while sample_idx < sample_count:
+      own dyn = compute_temp()
+      own offset = sample_idx % 4
+      dyn = dyn - 4
+      add dyn, offset
+      if dyn < min_temp:
+        min_temp = dyn
+      if dyn > max_temp:
+        max_temp = dyn
+      add sum_temp, dyn
+      add sample_idx, 1
+
+    own avg_temp = sum_temp / sample_count
+    own jitter = max_temp - min_temp
+    own status = classify_health(temp, avg_temp, jitter)
+
+    own telem = Telemetry(rpm, temp, status)
+    own message = render_status(telem.rpm, telem.temp, telem.status)
+
+    own timer0 = timer.new("loop0", 1000)
+    unused own started = timer.start(timer0, 5)
+    own wd = watchdog.new("wd0", 500)
+    unused own fed = watchdog.feed(wd)
+
+    own cmd = format("echo {}", message)
+    own captured = script.run_capture(cmd)
+    own summary = summarize_lines(captured)
+    own parts = split(summary, ":")
+    own non_empty_lines = to_int(array_get(parts, 0))
+    own total_chars = to_int(array_get(parts, 1))
+
+    own pin = gpio.claim("[port_a]")
+    unused own pin_cfg = gpio.mode(pin, "out")
+    own wrote = gpio.write(pin, 1)
+
+    own pulse = deterministic_window(seed % 8 + 2, 2)
+    own signal = phase(non_empty_lines > 0 and wrote, uncertainty)
+    own healthy = wrote and non_empty_lines > 0
+
+    if healthy:
+      own score = pulse
+      add score, non_empty_lines
+      add score, total_chars
+      add score, sample_count
+      add score, avg_temp
+
+      own digest = format("op={} args={} cwd={} ts={} os={}", operator, args_n, cwd, timestamp_ms, os_name)
+      print:
+        demo: "flagship"
+        profile: target_profile
+        status: "healthy"
+        message: message
+        digest: digest
+        samples: sample_count
+        min_temp: min_temp
+        avg_temp: avg_temp
+        max_temp: max_temp
+        jitter: jitter
+        lines: non_empty_lines
+        chars: total_chars
+        signal: signal
+        pulse: pulse
+        score: score
+      return score
+
+    print:
+      demo: "flagship"
+      profile: target_profile
+      status: "fallback"
+      message: message
+      samples: sample_count
+      min_temp: min_temp
+      avg_temp: avg_temp
+      max_temp: max_temp
+      jitter: jitter
+      lines: non_empty_lines
+      chars: total_chars
+      signal: signal
+      pulse: pulse
+    return 0
