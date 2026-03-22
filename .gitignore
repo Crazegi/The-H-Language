@@ -5,3 +5,6 @@ out.hbc.txt
 *.link.rs
 *.obj
 advanced.exe
+vscode-h-language/node_modules/
+vscode-h-language/*.vsix
+vscode-h-language/*.zip

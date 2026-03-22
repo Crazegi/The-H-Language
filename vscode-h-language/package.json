@@ -7,6 +7,13 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "scripts": {
+    "package": "vsce package",
+    "lint:json": "node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); JSON.parse(require('fs').readFileSync('syntaxes/h.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('snippets/h.json','utf8'));\""
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.2"
+  },
   "categories": [
     "Programming Languages"
   ],
