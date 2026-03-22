@@ -13,15 +13,23 @@ This repository now contains a complete end-to-end prototype for H (`.hl`) in Ru
 
 - Sections: `section .data:` and `section .text:`
 - Functions with parameters: `fn name(a, b):`
+- Java-style blocks are also supported: `fn name(a, b) { ... }`
 - Ownership and borrowing:
 	- `own r1 = 45`
 	- `ref alias = &r1`
+- Java-style typed declarations in function bodies:
+	- `int x = 10;`
+	- `string name = "engine";`
+	- `bool ok = true;`
 - Assembly-flavored instructions:
 	- `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
 - Expressions:
 	- arithmetic: `+ - * / %`
 	- comparisons: `== != < <= > >=`
 	- function calls inside expressions
+- Builtin math/functions:
+	- `abs(x)`, `sqrt(x)`, `pow(base, exp)`
+	- `min(a, b)`, `max(a, b)`, `clamp(v, lo, hi)`
 - Control flow:
 	- `if/else`
 	- `while`

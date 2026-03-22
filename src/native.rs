@@ -176,6 +176,23 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("fn as_int(v: Value) -> Result<i64, String> { match v { Value::Int(n) => Ok(n), _ => Err(\"expected int\".to_string()) } }\n");
     out.push_str("fn as_bool(v: Value) -> Result<bool, String> { match v { Value::Bool(b) => Ok(b), Value::Int(n) => Ok(n != 0), _ => Err(\"expected bool-compatible value\".to_string()) } }\n\n");
 
+    out.push_str("fn builtin_int_arg(args: &[Value], idx: usize) -> Result<i64, String> {\n");
+    out.push_str("  match args.get(idx) { Some(Value::Int(v)) => Ok(*v), _ => Err(\"expected integer argument\".to_string()) }\n");
+    out.push_str("}\n\n");
+
+    out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
+    out.push_str("  let out = match name {\n");
+    out.push_str("    \"abs\" => Value::Int(builtin_int_arg(args, 0)?.abs()),\n");
+    out.push_str("    \"sqrt\" => { let n = builtin_int_arg(args, 0)?; if n < 0 { return Err(\"sqrt expects non-negative integer\".to_string()); } Value::Int((n as f64).sqrt().floor() as i64) },\n");
+    out.push_str("    \"min\" => Value::Int(builtin_int_arg(args, 0)?.min(builtin_int_arg(args, 1)?)),\n");
+    out.push_str("    \"max\" => Value::Int(builtin_int_arg(args, 0)?.max(builtin_int_arg(args, 1)?)),\n");
+    out.push_str("    \"pow\" => { let base = builtin_int_arg(args, 0)?; let exp = builtin_int_arg(args, 1)?; if exp < 0 { return Err(\"pow exponent must be non-negative\".to_string()); } Value::Int(base.pow(exp as u32)) },\n");
+    out.push_str("    \"clamp\" => { let v = builtin_int_arg(args, 0)?; let lo = builtin_int_arg(args, 1)?; let hi = builtin_int_arg(args, 2)?; Value::Int(v.clamp(lo, hi)) },\n");
+    out.push_str("    _ => return Ok(None),\n");
+    out.push_str("  };\n");
+    out.push_str("  Ok(Some(out))\n");
+    out.push_str("}\n\n");
+
     out.push_str("fn cmp_values(a: &Value, b: &Value) -> Result<Ordering, String> {\n");
     out.push_str("  match (a, b) {\n");
     out.push_str("    (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),\n");
@@ -208,6 +225,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("  }\n}\n\n");
 
     out.push_str("fn call(fn_name: &str, funcs: &HashMap<String, Function>, globals: &HashMap<String, Value>, args: Vec<Value>) -> Result<Value, String> {\n");
+    out.push_str("  if let Some(v) = call_builtin(fn_name, &args)? { return Ok(v); }\n");
     out.push_str("  let f = funcs.get(fn_name).ok_or_else(|| format!(\"unknown function `{}`\", fn_name))?.clone();\n");
     out.push_str("  if f.params.len() != args.len() { return Err(format!(\"arity mismatch for {}\", fn_name)); }\n");
     out.push_str("  let mut locals: HashMap<String, Value> = HashMap::new();\n");

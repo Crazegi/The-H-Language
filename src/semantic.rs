@@ -176,10 +176,18 @@ fn analyze_expr(
             Ok(())
         }
         Expr::Call { name, args } => {
-            let expected = signatures.get(name).ok_or_else(|| {
-                SemanticError::new(format!("Call to unknown function `{}`", name))
-            })?;
-            if *expected != args.len() {
+            let expected = if let Some(v) = signatures.get(name) {
+                *v
+            } else if let Some(v) = builtin_arity(name) {
+                v
+            } else {
+                return Err(SemanticError::new(format!(
+                    "Call to unknown function `{}`",
+                    name
+                )));
+            };
+
+            if expected != args.len() {
                 return Err(SemanticError::new(format!(
                     "Function `{}` expects {} args, got {}",
                     name,
@@ -192,5 +200,17 @@ fn analyze_expr(
             }
             Ok(())
         }
+    }
+}
+
+fn builtin_arity(name: &str) -> Option<usize> {
+    match name {
+        "abs" => Some(1),
+        "sqrt" => Some(1),
+        "min" => Some(2),
+        "max" => Some(2),
+        "pow" => Some(2),
+        "clamp" => Some(3),
+        _ => None,
     }
 }

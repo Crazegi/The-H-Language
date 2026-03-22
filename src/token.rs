@@ -23,6 +23,9 @@ pub enum TokenKind {
     KeywordReturn,
     KeywordTrue,
     KeywordFalse,
+    KeywordInt,
+    KeywordString,
+    KeywordBool,
     Mnemonic,
     Identifier,
     Register,
@@ -47,6 +50,9 @@ pub enum TokenKind {
     Ampersand,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    Semicolon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +91,9 @@ impl fmt::Display for TokenKind {
             KeywordReturn => "KEYWORD_RETURN",
             KeywordTrue => "KEYWORD_TRUE",
             KeywordFalse => "KEYWORD_FALSE",
+            KeywordInt => "KEYWORD_INT",
+            KeywordString => "KEYWORD_STRING",
+            KeywordBool => "KEYWORD_BOOL",
             Mnemonic => "MNEMONIC",
             Identifier => "IDENTIFIER",
             Register => "REGISTER",
@@ -109,6 +118,9 @@ impl fmt::Display for TokenKind {
             Ampersand => "AMPERSAND",
             LParen => "LPAREN",
             RParen => "RPAREN",
+            LBrace => "LBRACE",
+            RBrace => "RBRACE",
+            Semicolon => "SEMICOLON",
         };
         write!(f, "{}", label)
     }

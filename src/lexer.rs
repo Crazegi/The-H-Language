@@ -168,6 +168,21 @@ impl Lexer {
                     self.advance();
                     tok
                 }
+                '{' => {
+                    let tok = Token::new(TokenKind::LBrace, "{", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                '}' => {
+                    let tok = Token::new(TokenKind::RBrace, "}", self.line, self.column);
+                    self.advance();
+                    tok
+                }
+                ';' => {
+                    let tok = Token::new(TokenKind::Semicolon, ";", self.line, self.column);
+                    self.advance();
+                    tok
+                }
                 '"' => self.scan_string()?,
                 c if c.is_ascii_digit() => self.scan_number(),
                 c if is_ident_start(c) => self.scan_word(),
@@ -300,6 +315,9 @@ impl Lexer {
             "return" => TokenKind::KeywordReturn,
             "true" => TokenKind::KeywordTrue,
             "false" => TokenKind::KeywordFalse,
+            "int" => TokenKind::KeywordInt,
+            "string" => TokenKind::KeywordString,
+            "bool" => TokenKind::KeywordBool,
             _ if is_register(&s) => TokenKind::Register,
             _ if MNEMONICS.contains(&lower.as_str()) => TokenKind::Mnemonic,
             _ => TokenKind::Identifier,

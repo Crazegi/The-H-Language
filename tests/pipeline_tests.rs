@@ -45,3 +45,32 @@ section .text:
     let err = analyze(&program).expect_err("assigning to ref should fail");
     assert!(err.message.contains("Cannot assign to reference binding"));
 }
+
+#[test]
+fn parses_java_style_syntax_and_math_builtins() {
+    let src = r#"section .data:
+  cap: 100
+
+section .text:
+  fn main() {
+    int x = -9;
+    int y = abs(x);
+    int z = pow(y, 2);
+    int root = sqrt(z);
+    int low = min(root, 4);
+    int high = max(low, 7);
+    int bounded = clamp(high, 0, cap);
+    if (bounded >= 7) {
+      print:
+        event: "java_style"
+        reading: bounded
+    }
+    return bounded;
+  }
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "7");
+}

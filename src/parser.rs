@@ -120,29 +120,27 @@ impl Parser {
         }
 
         self.expect(TokenKind::RParen, "Expected `)` after function params")?;
-        self.expect(TokenKind::Colon, "Expected `:` after function signature")?;
-        self.expect(TokenKind::Newline, "Expected newline after function header")?;
-        self.expect(TokenKind::Indent, "Expected indented function body")?;
-
-        let mut body = Vec::new();
-        while !self.check(TokenKind::Dedent) && !self.is_at_end() {
-            self.skip_newlines();
-            if self.check(TokenKind::Dedent) {
-                break;
-            }
-            body.push(self.parse_statement()?);
-        }
-
-        self.expect(TokenKind::Dedent, "Expected end of function body")?;
+        let body = self.parse_block("function body")?;
         Ok(Function { name, params, body })
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_kind(TokenKind::KeywordInt)
+            || self.match_kind(TokenKind::KeywordString)
+            || self.match_kind(TokenKind::KeywordBool)
+        {
+            let name = self.expect_identifier_like("Expected identifier after type")?.lexeme;
+            self.expect(TokenKind::Assign, "Expected `=` in typed declaration")?;
+            let expr = self.parse_expression()?;
+            self.consume_stmt_terminator();
+            return Ok(Stmt::OwnDecl { name, expr });
+        }
+
         if self.match_kind(TokenKind::KeywordOwn) {
             let name = self.expect_identifier_like("Expected identifier after `own`")?.lexeme;
             self.expect(TokenKind::Assign, "Expected `=` in own declaration")?;
             let expr = self.parse_expression()?;
-            self.consume_newline_if_present();
+            self.consume_stmt_terminator();
             return Ok(Stmt::OwnDecl { name, expr });
         }
 
@@ -151,38 +149,18 @@ impl Parser {
             self.expect(TokenKind::Assign, "Expected `=` in ref declaration")?;
             self.expect(TokenKind::Ampersand, "Expected `&` in ref declaration")?;
             let target = self.expect_identifier_like("Expected referenced identifier")?.lexeme;
-            self.consume_newline_if_present();
+            self.consume_stmt_terminator();
             return Ok(Stmt::RefDecl { name, target });
         }
 
         if self.match_kind(TokenKind::KeywordIf) {
             let condition = self.parse_expression()?;
-            self.expect(TokenKind::Colon, "Expected `:` after if condition")?;
-            self.expect(TokenKind::Newline, "Expected newline after if header")?;
-            self.expect(TokenKind::Indent, "Expected indented if body")?;
-            let mut then_body = Vec::new();
-            while !self.check(TokenKind::Dedent) && !self.is_at_end() {
-                self.skip_newlines();
-                if self.check(TokenKind::Dedent) {
-                    break;
-                }
-                then_body.push(self.parse_statement()?);
-            }
-            self.expect(TokenKind::Dedent, "Expected end of if body")?;
+            let then_body = self.parse_block("if body")?;
+            self.skip_newlines();
 
             let mut else_body = Vec::new();
             if self.match_kind(TokenKind::KeywordElse) {
-                self.expect(TokenKind::Colon, "Expected `:` after else")?;
-                self.expect(TokenKind::Newline, "Expected newline after else")?;
-                self.expect(TokenKind::Indent, "Expected indented else body")?;
-                while !self.check(TokenKind::Dedent) && !self.is_at_end() {
-                    self.skip_newlines();
-                    if self.check(TokenKind::Dedent) {
-                        break;
-                    }
-                    else_body.push(self.parse_statement()?);
-                }
-                self.expect(TokenKind::Dedent, "Expected end of else body")?;
+                else_body = self.parse_block("else body")?;
             }
 
             return Ok(Stmt::If {
@@ -194,18 +172,7 @@ impl Parser {
 
         if self.match_kind(TokenKind::KeywordWhile) {
             let condition = self.parse_expression()?;
-            self.expect(TokenKind::Colon, "Expected `:` after while condition")?;
-            self.expect(TokenKind::Newline, "Expected newline after while")?;
-            self.expect(TokenKind::Indent, "Expected indented while body")?;
-            let mut body = Vec::new();
-            while !self.check(TokenKind::Dedent) && !self.is_at_end() {
-                self.skip_newlines();
-                if self.check(TokenKind::Dedent) {
-                    break;
-                }
-                body.push(self.parse_statement()?);
-            }
-            self.expect(TokenKind::Dedent, "Expected end of while body")?;
+            let body = self.parse_block("while body")?;
             return Ok(Stmt::While { condition, body });
         }
 
@@ -238,7 +205,7 @@ impl Parser {
                 return Ok(Stmt::Return(None));
             }
             let expr = self.parse_expression()?;
-            self.consume_newline_if_present();
+            self.consume_stmt_terminator();
             return Ok(Stmt::Return(Some(expr)));
         }
 
@@ -262,7 +229,7 @@ impl Parser {
             let target = self.expect_identifier_like("Expected instruction target")?.lexeme;
             self.expect(TokenKind::Comma, "Expected `,` after instruction target")?;
             let rhs = self.parse_expression()?;
-            self.consume_newline_if_present();
+            self.consume_stmt_terminator();
             return Ok(Stmt::Instruction { op, target, rhs });
         }
 
@@ -270,12 +237,12 @@ impl Parser {
             let name = self.advance().lexeme.clone();
             if self.match_kind(TokenKind::Assign) {
                 let expr = self.parse_expression()?;
-                self.consume_newline_if_present();
+                self.consume_stmt_terminator();
                 return Ok(Stmt::Assign { name, expr });
             }
             if self.match_kind(TokenKind::LParen) {
                 let args = self.parse_call_args()?;
-                self.consume_newline_if_present();
+                self.consume_stmt_terminator();
                 return Ok(Stmt::Expr(Expr::Call { name, args }));
             }
             return Err(ParseError::new(
@@ -285,8 +252,46 @@ impl Parser {
         }
 
         let expr = self.parse_expression()?;
-        self.consume_newline_if_present();
+        self.consume_stmt_terminator();
         Ok(Stmt::Expr(expr))
+    }
+
+    fn parse_block(&mut self, context: &str) -> Result<Vec<Stmt>, ParseError> {
+        if self.match_kind(TokenKind::Colon) {
+            self.expect(TokenKind::Newline, "Expected newline after `:`")?;
+            self.expect(TokenKind::Indent, "Expected indented block")?;
+            let mut body = Vec::new();
+            while !self.check(TokenKind::Dedent) && !self.is_at_end() {
+                self.skip_newlines();
+                if self.check(TokenKind::Dedent) {
+                    break;
+                }
+                body.push(self.parse_statement()?);
+            }
+            self.expect(TokenKind::Dedent, "Expected end of indented block")?;
+            return Ok(body);
+        }
+
+        if self.match_kind(TokenKind::LBrace) {
+            let mut body = Vec::new();
+            self.skip_brace_layout();
+            while !self.check(TokenKind::RBrace) && !self.is_at_end() {
+                self.skip_brace_layout();
+                if self.check(TokenKind::RBrace) {
+                    break;
+                }
+                body.push(self.parse_statement()?);
+                self.skip_brace_layout();
+            }
+            self.expect(TokenKind::RBrace, "Expected `}` to close block")?;
+            self.consume_newline_if_present();
+            return Ok(body);
+        }
+
+        Err(ParseError::new(
+            self.peek(),
+            format!("Expected ':' or '{{' for {}", context),
+        ))
     }
 
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, ParseError> {
@@ -479,6 +484,26 @@ impl Parser {
     fn consume_newline_if_present(&mut self) {
         if self.check(TokenKind::Newline) {
             self.advance();
+        }
+    }
+
+    fn consume_stmt_terminator(&mut self) {
+        if self.check(TokenKind::Semicolon) {
+            self.advance();
+        }
+        self.consume_newline_if_present();
+    }
+
+    fn skip_brace_layout(&mut self) {
+        loop {
+            if self.check(TokenKind::Newline)
+                || self.check(TokenKind::Indent)
+                || self.check(TokenKind::Dedent)
+            {
+                self.advance();
+            } else {
+                break;
+            }
         }
     }
 

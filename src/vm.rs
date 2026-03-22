@@ -46,6 +46,10 @@ pub fn run_bytecode(program: &BytecodeProgram) -> Result<Value, VmError> {
 }
 
 fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
+    if let Some(v) = call_builtin(name, &args)? {
+        return Ok(v);
+    }
+
     let function = program
         .functions
         .get(name)
@@ -206,6 +210,44 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
     }
 
     Ok(Value::Unit)
+}
+
+fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, VmError> {
+    fn int_arg(args: &[Value], idx: usize) -> Result<i64, VmError> {
+        match args.get(idx) {
+            Some(Value::Int(v)) => Ok(*v),
+            _ => Err(VmError::new("Expected integer argument")),
+        }
+    }
+
+    let out = match name {
+        "abs" => Value::Int(int_arg(args, 0)?.abs()),
+        "sqrt" => {
+            let n = int_arg(args, 0)?;
+            if n < 0 {
+                return Err(VmError::new("sqrt expects non-negative integer"));
+            }
+            Value::Int((n as f64).sqrt().floor() as i64)
+        }
+        "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
+        "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
+        "pow" => {
+            let base = int_arg(args, 0)?;
+            let exp = int_arg(args, 1)?;
+            if exp < 0 {
+                return Err(VmError::new("pow exponent must be non-negative"));
+            }
+            Value::Int(base.pow(exp as u32))
+        }
+        "clamp" => {
+            let v = int_arg(args, 0)?;
+            let lo = int_arg(args, 1)?;
+            let hi = int_arg(args, 2)?;
+            Value::Int(v.clamp(lo, hi))
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(out))
 }
 
 fn pop(stack: &mut Vec<Value>) -> Result<Value, VmError> {

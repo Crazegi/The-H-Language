@@ -74,6 +74,10 @@ impl Runtime {
     }
 
     fn call_function(&self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if let Some(v) = call_builtin(name, &args)? {
+            return Ok(v);
+        }
+
         let function = self
             .functions
             .get(name)
@@ -301,6 +305,44 @@ impl Runtime {
 
         Err(RuntimeError::new(format!("Unknown symbol `{}`", name)))
     }
+}
+
+fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, RuntimeError> {
+    fn int_arg(args: &[Value], idx: usize) -> Result<i64, RuntimeError> {
+        args.get(idx)
+            .ok_or_else(|| RuntimeError::new("Missing argument"))?
+            .as_int()
+    }
+
+    let out = match name {
+        "abs" => Value::Int(int_arg(args, 0)?.abs()),
+        "sqrt" => {
+            let n = int_arg(args, 0)?;
+            if n < 0 {
+                return Err(RuntimeError::new("sqrt expects non-negative integer"));
+            }
+            Value::Int((n as f64).sqrt().floor() as i64)
+        }
+        "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
+        "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
+        "pow" => {
+            let base = int_arg(args, 0)?;
+            let exp = int_arg(args, 1)?;
+            if exp < 0 {
+                return Err(RuntimeError::new("pow exponent must be non-negative"));
+            }
+            Value::Int(base.pow(exp as u32))
+        }
+        "clamp" => {
+            let v = int_arg(args, 0)?;
+            let lo = int_arg(args, 1)?;
+            let hi = int_arg(args, 2)?;
+            Value::Int(v.clamp(lo, hi))
+        }
+        _ => return Ok(None),
+    };
+
+    Ok(Some(out))
 }
 
 enum Flow {
