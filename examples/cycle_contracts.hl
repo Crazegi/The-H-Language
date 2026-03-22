@@ -1,0 +1,59 @@
+section .data:
+  port_name: "PORT_A"
+  uncertainty: maybe
+
+section .text:
+  fn timed_pulse():
+    own r1 = 10
+    own r2 = 3
+
+    // Generic profile: add(1) + mov(1) = 2 cycles, so this pads 1 nop.
+    contract:
+      cycles: 3
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mov [port_a], r1
+
+    // Profile-sensitive contract:
+    // generic: mul(2) + mov(1) = 3
+    // avr-like: mul(3) + mov(1) = 4 -> overflow if budget is 3
+    // cortex-m0-like: mul(1) + mov(1) = 2 -> underflow unless padded
+    contract:
+      cycles: 3
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mul r1, r2
+      mov [port_a], r1
+
+    return r1
+
+  fn logic_guard(signal):
+    own phase_state = phase(signal, uncertainty)
+    own gate = collapse(not phase_state)
+
+    if gate:
+      print:
+        event: "stable_window"
+        port: port_name
+        state: phase_state
+    else:
+      print:
+        event: "unstable_window"
+        port: port_name
+        state: phase_state
+
+    return gate
+
+  fn main():
+    own pulse = timed_pulse()
+    own ok = logic_guard(true)
+
+    print:
+      event: "summary"
+      pulse_value: pulse
+      gate_ok: ok
+
+    return pulse

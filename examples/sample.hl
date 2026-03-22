@@ -5,7 +5,15 @@ section .text:
   fn calculate_temp():
     own r1 = 45
     own r2 = 15
-    add r1, r2
+
+    contract:
+      cycles: 4
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mov [port_a], r1
+
     ref label = &name
 
     print:
@@ -13,3 +21,5 @@ section .text:
       sensor: label
       reading: r1
       status: "stable"
+
+    return r1

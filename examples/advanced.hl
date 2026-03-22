@@ -12,7 +12,15 @@ section .text:
   fn main():
     own r1 = 45
     own r2 = 15
-    add r1, r2
+
+    contract:
+      cycles: 6
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      add r1, r2
+      mul r1, r2
+      mov [port_a], r1
 
     own r3 = calibrate(r1, 5)
     ref label = &engine_name
@@ -30,7 +38,7 @@ section .text:
         reading: r3
         status: "stable"
 
-    while r1 < 70:
+    while r1 < threshold:
       add r1, 2
 
     repeat 2:
