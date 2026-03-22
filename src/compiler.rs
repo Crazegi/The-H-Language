@@ -81,6 +81,7 @@ struct RawProfileDef {
     unknown_policy: Option<UnknownCycleCostPolicy>,
     conservative_fallback: Option<u64>,
     costs: HashMap<String, u64>,
+    energy_nj_costs: HashMap<String, u64>,
     sources: HashMap<String, String>,
     confidence: HashMap<String, String>,
     worst_case_cycles: HashMap<String, u64>,
@@ -157,10 +158,18 @@ pub struct ContractCompileReport {
     pub cycle_profile: String,
     pub declared_cycles: u64,
     pub measured_cycles: u64,
+    pub declared_energy_nj: Option<u64>,
+    pub measured_energy_nj: Option<u64>,
     pub padded_nops: u64,
     pub final_cycles: u64,
     pub on_underflow: ContractPolicy,
     pub on_overflow: ContractPolicy,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExecuteCost {
+    cycles: u64,
+    energy_nj: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +304,14 @@ pub fn load_cycle_profiles_from_toml_str(
             collect_cost_entries(name, "", costs_table, &mut costs)?;
         }
 
+        let mut energy_nj_costs = HashMap::new();
+        if let Some(energy_table) = table.get("energy_nj") {
+            let energy_table = energy_table.as_table().ok_or_else(|| {
+                CycleProfileLoadError::new(format!("profiles.{}.energy_nj must be a table", name))
+            })?;
+            collect_cost_entries(name, "", energy_table, &mut energy_nj_costs)?;
+        }
+
         let mut sources = HashMap::new();
         if let Some(sources_table) = table.get("sources") {
             let sources_table = sources_table.as_table().ok_or_else(|| {
@@ -341,6 +358,7 @@ pub fn load_cycle_profiles_from_toml_str(
                 unknown_policy,
                 conservative_fallback,
                 costs,
+                energy_nj_costs,
                 sources,
                 confidence,
                 worst_case_cycles,
@@ -517,6 +535,9 @@ fn resolve_custom_profile(
     for (k, v) in &def.costs {
         base.costs.insert(k.clone(), *v);
     }
+    for (k, v) in &def.energy_nj_costs {
+        base.costs.insert(format!("energy.{}", k), *v);
+    }
     for (k, v) in &def.sources {
         base.metadata
             .entry(k.clone())
@@ -608,6 +629,63 @@ fn builtin_profile_for(profile: CycleProfile) -> CycleCostProfile {
         },
     );
     costs.insert("stmt.store".to_string(), 1);
+
+    costs.insert("energy.instr.mov".to_string(), 1);
+    costs.insert("energy.instr.add".to_string(), 1);
+    costs.insert("energy.instr.sub".to_string(), 1);
+    costs.insert("energy.instr.cmp".to_string(), 1);
+    costs.insert(
+        "energy.instr.mul".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 3,
+            CycleProfile::CortexM0Like => 1,
+        },
+    );
+    costs.insert(
+        "energy.instr.div".to_string(),
+        match profile {
+            CycleProfile::Generic => 3,
+            CycleProfile::AvrLike => 5,
+            CycleProfile::CortexM0Like => 9,
+        },
+    );
+    costs.insert(
+        "energy.instr.mod".to_string(),
+        match profile {
+            CycleProfile::Generic => 3,
+            CycleProfile::AvrLike => 5,
+            CycleProfile::CortexM0Like => 9,
+        },
+    );
+    costs.insert("energy.expr.atom".to_string(), 1);
+    costs.insert("energy.expr.unary".to_string(), 1);
+    costs.insert("energy.expr.binary.default".to_string(), 1);
+    costs.insert(
+        "energy.expr.mul".to_string(),
+        match profile {
+            CycleProfile::Generic => 2,
+            CycleProfile::AvrLike => 3,
+            CycleProfile::CortexM0Like => 1,
+        },
+    );
+    costs.insert(
+        "energy.expr.div".to_string(),
+        match profile {
+            CycleProfile::Generic => 3,
+            CycleProfile::AvrLike => 5,
+            CycleProfile::CortexM0Like => 9,
+        },
+    );
+    costs.insert(
+        "energy.expr.mod".to_string(),
+        match profile {
+            CycleProfile::Generic => 3,
+            CycleProfile::AvrLike => 5,
+            CycleProfile::CortexM0Like => 9,
+        },
+    );
+    costs.insert("energy.stmt.store".to_string(), 1);
 
     CycleCostProfile {
         name: profile.as_str().to_string(),
@@ -800,10 +878,12 @@ fn collect_execute_required_cycle_keys(
                 AstInstruction::Cmp => "instr.cmp",
             };
             keys.insert(key.to_string());
+            keys.insert(format!("energy.{}", key));
         }
         Stmt::OwnDecl { expr, .. } | Stmt::Assign { expr, .. } => {
             collect_expr_cycle_keys(expr, keys);
             keys.insert("stmt.store".to_string());
+            keys.insert("energy.stmt.store".to_string());
         }
         Stmt::If {
             condition,
@@ -832,10 +912,12 @@ fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<St
     match expr {
         Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
             keys.insert("expr.atom".to_string());
+            keys.insert("energy.expr.atom".to_string());
         }
         Expr::Unary { rhs, .. } => {
             collect_expr_cycle_keys(rhs, keys);
             keys.insert("expr.unary".to_string());
+            keys.insert("energy.expr.unary".to_string());
         }
         Expr::Binary { left, op, right } => {
             collect_expr_cycle_keys(left, keys);
@@ -847,11 +929,13 @@ fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<St
                 _ => "expr.binary.default",
             };
             keys.insert(key.to_string());
+            keys.insert(format!("energy.{}", key));
         }
         Expr::Call { .. } => {
             // Calls are currently rejected in execute blocks, but we still record
             // this baseline expression category for profile completeness diagnostics.
             keys.insert("expr.atom".to_string());
+            keys.insert("energy.expr.atom".to_string());
         }
     }
 }
@@ -1137,13 +1221,19 @@ impl FunctionCompiler {
 
         self.contract_counter += 1;
         let contract_index = self.contract_counter;
+        let track_energy = spec.energy_nj.is_some();
 
         let mut total_cycles: u64 = 0;
+        let mut total_energy_nj: u64 = 0;
         let mut const_env: HashMap<String, FoldValue> = HashMap::new();
         for s in body {
+            let cost = self.compile_execute_stmt(s, &mut const_env, track_energy)?;
             total_cycles = total_cycles
-                .checked_add(self.compile_execute_stmt(s, &mut const_env)?)
+                .checked_add(cost.cycles)
                 .ok_or_else(|| CompileError::new("Cycle count overflow in contract block"))?;
+            total_energy_nj = total_energy_nj
+                .checked_add(cost.energy_nj)
+                .ok_or_else(|| CompileError::new("Energy count overflow in contract block"))?;
         }
 
         let mut padded_nops = 0u64;
@@ -1194,6 +1284,28 @@ impl FunctionCompiler {
             }
         }
 
+        if let Some(energy_budget_nj) = spec.energy_nj {
+            if total_energy_nj > energy_budget_nj {
+                match spec.on_overflow {
+                    ContractPolicy::CompileError => {
+                        if self.options.strict_cycle_contracts {
+                            return Err(CompileError::new(format!(
+                                "Energy contract overflow in function `{}` contract #{} (profile: {}): block costs {} nJ but contract allows {} nJ",
+                                self.function_name,
+                                contract_index,
+                                self.active_cycle_profile.name,
+                                total_energy_nj,
+                                energy_budget_nj
+                            )));
+                        }
+                    }
+                    ContractPolicy::PadNop => {
+                        // Energy overflow cannot be solved by padding.
+                    }
+                }
+            }
+        }
+
         let final_cycles = total_cycles + padded_nops;
         self.contract_reports.push(ContractCompileReport {
             function_name: self.function_name.clone(),
@@ -1201,6 +1313,12 @@ impl FunctionCompiler {
             cycle_profile: self.active_cycle_profile.name.clone(),
             declared_cycles: spec.cycles,
             measured_cycles: total_cycles,
+            declared_energy_nj: spec.energy_nj,
+            measured_energy_nj: if track_energy {
+                Some(total_energy_nj)
+            } else {
+                None
+            },
             padded_nops,
             final_cycles,
             on_underflow: spec.on_underflow,
@@ -1214,10 +1332,16 @@ impl FunctionCompiler {
         &mut self,
         stmt: &Stmt,
         const_env: &mut HashMap<String, FoldValue>,
-    ) -> Result<u64, CompileError> {
+        track_energy: bool,
+    ) -> Result<ExecuteCost, CompileError> {
         match stmt {
             Stmt::Instruction { op, target, rhs } => {
-                let cost = stmt_cycle_cost(stmt, &self.active_cycle_profile)?;
+                let cycles = stmt_cycle_cost(stmt, &self.active_cycle_profile)?;
+                let energy_nj = if track_energy {
+                    stmt_energy_cost(stmt, &self.active_cycle_profile)?
+                } else {
+                    0
+                };
                 self.compile_stmt(stmt)?;
 
                 if !is_memory_target(target) {
@@ -1247,14 +1371,27 @@ impl FunctionCompiler {
                     }
                 }
 
-                Ok(cost)
+                Ok(ExecuteCost { cycles, energy_nj })
             }
             Stmt::OwnDecl { name, expr } => {
                 self.compile_stmt(stmt)?;
-                let mut cost = expr_cycle_cost(expr, &self.active_cycle_profile)?;
-                cost = cost
+                let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
+                cycles = cycles
                     .checked_add(cycle_cost(&self.active_cycle_profile, "stmt.store")?)
                     .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+
+                let mut energy_nj = if track_energy {
+                    expr_energy_cost(expr, &self.active_cycle_profile)?
+                } else {
+                    0
+                };
+                if track_energy {
+                    energy_nj = energy_nj
+                        .checked_add(cycle_cost(&self.active_cycle_profile, "energy.stmt.store")?)
+                        .ok_or_else(|| {
+                            CompileError::new("Energy count overflow in execute block")
+                        })?;
+                }
 
                 if let Some(value) =
                     eval_execute_const_expr(expr, const_env, self.options.fast_math)?
@@ -1263,14 +1400,27 @@ impl FunctionCompiler {
                 } else {
                     const_env.remove(name);
                 }
-                Ok(cost)
+                Ok(ExecuteCost { cycles, energy_nj })
             }
             Stmt::Assign { name, expr } => {
                 self.compile_stmt(stmt)?;
-                let mut cost = expr_cycle_cost(expr, &self.active_cycle_profile)?;
-                cost = cost
+                let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
+                cycles = cycles
                     .checked_add(cycle_cost(&self.active_cycle_profile, "stmt.store")?)
                     .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+
+                let mut energy_nj = if track_energy {
+                    expr_energy_cost(expr, &self.active_cycle_profile)?
+                } else {
+                    0
+                };
+                if track_energy {
+                    energy_nj = energy_nj
+                        .checked_add(cycle_cost(&self.active_cycle_profile, "energy.stmt.store")?)
+                        .ok_or_else(|| {
+                            CompileError::new("Energy count overflow in execute block")
+                        })?;
+                }
 
                 if let Some(value) =
                     eval_execute_const_expr(expr, const_env, self.options.fast_math)?
@@ -1279,7 +1429,7 @@ impl FunctionCompiler {
                 } else {
                     const_env.remove(name);
                 }
-                Ok(cost)
+                Ok(ExecuteCost { cycles, energy_nj })
             }
             Stmt::If {
                 condition,
@@ -1297,11 +1447,22 @@ impl FunctionCompiler {
                 let choose_then = fold_value_as_bool(&cond)?;
                 let chosen = if choose_then { then_body } else { else_body };
 
-                let mut total = 0u64;
+                let mut total = ExecuteCost {
+                    cycles: 0,
+                    energy_nj: 0,
+                };
                 for s in chosen {
-                    total = total
-                        .checked_add(self.compile_execute_stmt(s, const_env)?)
+                    let cost = self.compile_execute_stmt(s, const_env, track_energy)?;
+                    total.cycles = total
+                        .cycles
+                        .checked_add(cost.cycles)
                         .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+                    total.energy_nj = total
+                        .energy_nj
+                        .checked_add(cost.energy_nj)
+                        .ok_or_else(|| {
+                            CompileError::new("Energy count overflow in execute block")
+                        })?;
                 }
                 Ok(total)
             }
@@ -1314,13 +1475,24 @@ impl FunctionCompiler {
                 };
 
                 let reps = fold_value_as_non_negative_int(&reps)?;
-                let mut total = 0u64;
+                let mut total = ExecuteCost {
+                    cycles: 0,
+                    energy_nj: 0,
+                };
                 for _ in 0..reps {
                     for s in body {
-                        total = total
-                            .checked_add(self.compile_execute_stmt(s, const_env)?)
+                        let cost = self.compile_execute_stmt(s, const_env, track_energy)?;
+                        total.cycles = total
+                            .cycles
+                            .checked_add(cost.cycles)
                             .ok_or_else(|| {
                                 CompileError::new("Cycle count overflow in execute block")
+                            })?;
+                        total.energy_nj = total
+                            .energy_nj
+                            .checked_add(cost.energy_nj)
+                            .ok_or_else(|| {
+                                CompileError::new("Energy count overflow in execute block")
                             })?;
                     }
                 }
@@ -1422,6 +1594,38 @@ fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Compi
     }
 }
 
+fn expr_energy_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, CompileError> {
+    match expr {
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => {
+            cycle_cost(profile, "energy.expr.atom")
+        }
+        Expr::Unary { rhs, .. } => {
+            let rhs_cost = expr_energy_cost(rhs, profile)?;
+            rhs_cost
+                .checked_add(cycle_cost(profile, "energy.expr.unary")?)
+                .ok_or_else(|| CompileError::new("Energy count overflow in expression"))
+        }
+        Expr::Binary { left, op, right } => {
+            let left_cost = expr_energy_cost(left, profile)?;
+            let right_cost = expr_energy_cost(right, profile)?;
+            let op_cost = match op {
+                BinaryOp::Mul => cycle_cost(profile, "energy.expr.mul")?,
+                BinaryOp::Div => cycle_cost(profile, "energy.expr.div")?,
+                BinaryOp::Mod => cycle_cost(profile, "energy.expr.mod")?,
+                _ => cycle_cost(profile, "energy.expr.binary.default")?,
+            };
+
+            left_cost
+                .checked_add(right_cost)
+                .and_then(|v| v.checked_add(op_cost))
+                .ok_or_else(|| CompileError::new("Energy count overflow in expression"))
+        }
+        Expr::Call { .. } => Err(CompileError::new(
+            "Cycle contract execute block does not allow function calls",
+        )),
+    }
+}
+
 fn stmt_cycle_cost(stmt: &Stmt, profile: &CycleCostProfile) -> Result<u64, CompileError> {
     match stmt {
         Stmt::Instruction { op, .. } => Ok(match op {
@@ -1432,6 +1636,23 @@ fn stmt_cycle_cost(stmt: &Stmt, profile: &CycleCostProfile) -> Result<u64, Compi
             AstInstruction::Mul => cycle_cost(profile, "instr.mul")?,
             AstInstruction::Div => cycle_cost(profile, "instr.div")?,
             AstInstruction::Mod => cycle_cost(profile, "instr.mod")?,
+        }),
+        _ => Err(CompileError::new(
+            "Cycle contract execute block supports only assembly instructions",
+        )),
+    }
+}
+
+fn stmt_energy_cost(stmt: &Stmt, profile: &CycleCostProfile) -> Result<u64, CompileError> {
+    match stmt {
+        Stmt::Instruction { op, .. } => Ok(match op {
+            AstInstruction::Mov => cycle_cost(profile, "energy.instr.mov")?,
+            AstInstruction::Add => cycle_cost(profile, "energy.instr.add")?,
+            AstInstruction::Sub => cycle_cost(profile, "energy.instr.sub")?,
+            AstInstruction::Cmp => cycle_cost(profile, "energy.instr.cmp")?,
+            AstInstruction::Mul => cycle_cost(profile, "energy.instr.mul")?,
+            AstInstruction::Div => cycle_cost(profile, "energy.instr.div")?,
+            AstInstruction::Mod => cycle_cost(profile, "energy.instr.mod")?,
         }),
         _ => Err(CompileError::new(
             "Cycle contract execute block supports only assembly instructions",
@@ -1617,12 +1838,20 @@ pub fn render_contract_report_text(reports: &[ContractCompileReport]) -> String 
     let mut out = String::new();
     for report in reports {
         out.push_str(&format!(
-            "function={} contract=#{} profile={} declared={} measured={} padded_nops={} final={} underflow={:?} overflow={:?}\n",
+            "function={} contract=#{} profile={} declared={} measured={} declared_energy_nj={} measured_energy_nj={} padded_nops={} final={} underflow={:?} overflow={:?}\n",
             report.function_name,
             report.contract_index,
             report.cycle_profile,
             report.declared_cycles,
             report.measured_cycles,
+            report
+                .declared_energy_nj
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            report
+                .measured_energy_nj
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
             report.padded_nops,
             report.final_cycles,
             report.on_underflow,

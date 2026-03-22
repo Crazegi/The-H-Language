@@ -58,6 +58,7 @@ Contract shape:
 ```text
 contract:
   cycles: 16
+  energy_nj: 45
   on_underflow: "pad_nop"
   on_overflow: "compile_error"
 execute:
@@ -72,6 +73,7 @@ Rules:
 - Function calls are rejected inside `execute`.
 - Underflow can be padded with inserted `nop` instructions.
 - Overflow can be rejected as a compile-time error.
+- If `energy_nj` is set, compile fails when measured execute energy exceeds budget.
 
 ## Phase 4: Cycle Profiles And Reports
 
@@ -83,6 +85,8 @@ Available profiles:
 External profile files are also supported via `--cycle-profile-file`.
 Profiles can inherit from built-ins (or other custom profiles), override only selected keys,
 and set unknown-cost behavior.
+
+Energy budgets use profile table `energy_nj` (same key naming as `costs`, e.g. `instr.mov`).
 
 Profiles can also attach traceability metadata per key:
 - `sources.<key>` (where the number came from, e.g. TRM section)
@@ -99,6 +103,10 @@ unknown_policy = "strict"
 [profiles.cortex-m4-like.costs]
 "instr.mul" = 4
 "expr.mul" = 4
+
+[profiles.cortex-m4-like.energy_nj]
+"instr.mov" = 6
+"instr.mul" = 10
 
 [profiles.cortex-m4-like.sources]
 "instr.mul" = "ARM TRM rev C"
@@ -129,6 +137,8 @@ Contract report output includes:
 - selected profile
 - declared cycles
 - measured cycles
+- declared energy budget (when set)
+- measured energy (when set)
 - padded nop count
 - final cycle count
 - underflow and overflow policies

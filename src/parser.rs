@@ -537,6 +537,7 @@ impl Parser {
         self.expect(TokenKind::Indent, "Expected indented contract block")?;
 
         let mut cycles: Option<u64> = None;
+        let mut energy_nj: Option<u64> = None;
         let mut on_underflow: Option<ContractPolicy> = None;
         let mut on_overflow: Option<ContractPolicy> = None;
 
@@ -578,6 +579,22 @@ impl Parser {
                     let policy = self.parse_contract_policy("on_overflow")?;
                     on_overflow = Some(policy);
                 }
+                "energy_nj" => {
+                    let expr = self.parse_expression()?;
+                    let Expr::Number(value) = expr else {
+                        return Err(ParseError::new(
+                            self.peek(),
+                            "Contract `energy_nj` must be an integer literal",
+                        ));
+                    };
+                    if value < 0 {
+                        return Err(ParseError::new(
+                            self.peek(),
+                            "Contract `energy_nj` must be >= 0",
+                        ));
+                    }
+                    energy_nj = Some(value as u64);
+                }
                 _ => {
                     return Err(ParseError::new(
                         self.peek(),
@@ -595,6 +612,7 @@ impl Parser {
             cycles: cycles.ok_or_else(|| {
                 ParseError::new(self.peek(), "Contract requires `cycles` key")
             })?,
+            energy_nj,
             on_underflow: on_underflow.ok_or_else(|| {
                 ParseError::new(self.peek(), "Contract requires `on_underflow` key")
             })?,

@@ -22,6 +22,7 @@ pub enum ContractPolicy {
 #[derive(Debug, Clone)]
 pub struct CycleContract {
     pub cycles: u64,
+    pub energy_nj: Option<u64>,
     pub on_underflow: ContractPolicy,
     pub on_overflow: ContractPolicy,
 }

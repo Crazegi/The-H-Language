@@ -636,3 +636,83 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
     assert!(report.missing_keys.iter().any(|k| k == "instr.mul"));
     assert!(report.missing_keys.iter().any(|k| k == "stmt.store"));
   }
+
+#[test]
+fn energy_contract_overflow_reports_compile_error() {
+    let profile_path = unique_profile_path("energy_overflow.toml");
+    let profile_text = r#"[profiles.radio-heavy]
+extends = "generic"
+
+[profiles.radio-heavy.energy_nj]
+"instr.mov" = 60
+"#;
+    fs::write(&profile_path, profile_text).expect("profile file write should succeed");
+
+    let src = r#"section .text:
+  fn main():
+    own r1 = 1
+    contract:
+      cycles: 20
+      energy_nj: 20
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mov [radio_tx], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let profiles = load_cycle_profiles_from_file(&profile_path)
+      .expect("external profiles should load successfully");
+    let selected = profiles
+      .get("radio-heavy")
+      .expect("custom profile should exist")
+      .clone();
+
+    let err = compile_program_with_options(
+      &program,
+      CompileOptions {
+        cycle_profile: CycleProfile::Generic,
+        cycle_profile_override: Some(selected),
+        ..Default::default()
+      },
+    )
+    .expect_err("energy budget overflow should fail compile");
+    assert!(err.message.contains("Energy contract overflow"));
+
+    let _ = fs::remove_file(profile_path);
+}
+
+#[test]
+fn contract_report_contains_energy_fields_when_present() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = 1
+    contract:
+      cycles: 8
+      energy_nj: 20
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+  let compiled = compile_program_with_options(
+    &program,
+    CompileOptions {
+      cycle_profile: CycleProfile::Generic,
+      cycle_profile_override: None,
+      ..Default::default()
+    },
+  )
+  .expect("compile should pass");
+
+    let text = render_contract_report_text(&compiled.contract_reports);
+    assert!(text.contains("declared_energy_nj=20"));
+    assert!(text.contains("measured_energy_nj="));
+}

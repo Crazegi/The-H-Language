@@ -6,6 +6,10 @@ unknown_policy = "strict"
 "instr.mul" = 4
 "expr.mul" = 4
 
+[profiles.cortex-m4-like.energy_nj]
+"instr.mov" = 6
+"instr.mul" = 10
+
 [profiles.cortex-m4-like.sources]
 "instr.mul" = "ARM TRM rev C"
 
@@ -23,3 +27,8 @@ conservative_fallback = 3
 [profiles.esp32-safe.costs]
 "instr.div" = 10
 "instr.mod" = 10
+
+[profiles.esp32-safe.energy_nj]
+"instr.mov" = 12
+"instr.div" = 20
+"instr.mod" = 20

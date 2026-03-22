@@ -10,6 +10,7 @@ section .text:
     // Generic profile: add(1) + mov(1) = 2 cycles, so this pads 1 nop.
     contract:
       cycles: 3
+      energy_nj: 8
       on_underflow: "pad_nop"
       on_overflow: "compile_error"
     execute:
@@ -22,6 +23,7 @@ section .text:
     // cortex-m0-like: mul(1) + mov(1) = 2 -> underflow unless padded
     contract:
       cycles: 3
+      energy_nj: 12
       on_underflow: "pad_nop"
       on_overflow: "compile_error"
     execute:
