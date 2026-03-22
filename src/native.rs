@@ -163,6 +163,8 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("use std::collections::HashMap;\n\n");
     out.push_str("use std::fs::{self, OpenOptions};\n");
     out.push_str("use std::io::{self, Write};\n");
+    out.push_str("use std::path::{Path, PathBuf};\n");
+    out.push_str("use std::process::Command;\n");
     out.push_str("use std::thread;\n");
     out.push_str("use std::time::{Duration, SystemTime, UNIX_EPOCH};\n\n");
 
@@ -259,6 +261,15 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("  None\n");
     out.push_str("}\n\n");
 
+    out.push_str("fn normalize_path(path: impl Into<PathBuf>) -> String { path.into().to_string_lossy().replace('\\\\', \"/\") }\n\n");
+
+    out.push_str("fn shell_command(command: &str) -> Command {\n");
+    out.push_str("  #[cfg(windows)]\n");
+    out.push_str("  { let mut cmd = Command::new(\"cmd\"); cmd.arg(\"/C\").arg(command); return cmd; }\n");
+    out.push_str("  #[cfg(not(windows))]\n");
+    out.push_str("  { let mut cmd = Command::new(\"sh\"); cmd.arg(\"-c\").arg(command); return cmd; }\n");
+    out.push_str("}\n\n");
+
     out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
     out.push_str("  let out = match name {\n");
     out.push_str("    \"abs\" => Value::Int(builtin_int_arg(args, 0)?.abs()),\n");
@@ -292,6 +303,15 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"menu\" => { let _title = builtin_str_arg(args, 0)?; let options = builtin_str_arg(args, 1)?; let first = options.split('|').next().map(|s| s.trim().to_string()).unwrap_or_default(); if first.is_empty() { Value::Maybe } else { Value::Str(first) } },\n");
     out.push_str("    \"http_get\" => { let url = builtin_str_arg(args, 0)?; let escaped = escape_json_string(url); Value::Str(format!(\"{{\\\"status\\\":200,\\\"url\\\":\\\"{}\\\",\\\"body\\\":\\\"stub\\\"}}\", escaped)) },\n");
     out.push_str("    \"json_parse\" => { let json = builtin_str_arg(args, 0)?; let key = builtin_str_arg(args, 1)?; parse_json_field(json, key).unwrap_or(Value::Maybe) },\n");
+    out.push_str("    \"script_args_count\" => Value::Int(std::env::args().count() as i64),\n");
+    out.push_str("    \"script_arg\" => { let idx = builtin_int_arg(args, 0)?; if idx < 0 { return Err(\"script_arg expects non-negative index\".to_string()); } Value::Str(std::env::args().nth(idx as usize).unwrap_or_default()) },\n");
+    out.push_str("    \"script_cwd\" => { let cwd = std::env::current_dir().map_err(|e| format!(\"script_cwd failed: {}\", e))?; Value::Str(normalize_path(cwd)) },\n");
+    out.push_str("    \"script_chdir\" => { let path = builtin_str_arg(args, 0)?; std::env::set_current_dir(path).map_err(|e| format!(\"script_chdir failed for `{}`: {}\", path, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"script_path_join\" => { let base = builtin_str_arg(args, 0)?; let child = builtin_str_arg(args, 1)?; Value::Str(normalize_path(Path::new(base).join(child))) },\n");
+    out.push_str("    \"script_dirname\" => { let path = builtin_str_arg(args, 0)?; let parent = Path::new(path).parent().map(normalize_path).unwrap_or_default(); Value::Str(parent) },\n");
+    out.push_str("    \"script_basename\" => { let path = builtin_str_arg(args, 0)?; let name = Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(); Value::Str(name) },\n");
+    out.push_str("    \"script_run\" => { let command = builtin_str_arg(args, 0)?; let status = shell_command(command).status().map_err(|e| format!(\"script_run failed for `{}`: {}\", command, e))?; Value::Int(status.code().unwrap_or(-1) as i64) },\n");
+    out.push_str("    \"script_run_capture\" => { let command = builtin_str_arg(args, 0)?; let output = shell_command(command).output().map_err(|e| format!(\"script_run_capture failed for `{}`: {}\", command, e))?; let mut out_s = String::new(); out_s.push_str(&String::from_utf8_lossy(&output.stdout)); out_s.push_str(&String::from_utf8_lossy(&output.stderr)); while out_s.ends_with('\\n') || out_s.ends_with('\\r') { out_s.pop(); } Value::Str(out_s) },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");

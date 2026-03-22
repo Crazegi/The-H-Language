@@ -58,6 +58,10 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
     - time/random: `sleep_ms`, `now_ms`, `rand_int`
     - utilities: `env`, `to_int`, `to_string`, `trim`, `replace`
     - starter API scaffold: `window_loop`, `menu`, `http_get`, `json_parse`
+  - scripting library:
+    - process args: `script_args_count`, `script_arg`
+    - working directory/path: `script_cwd`, `script_chdir`, `script_path_join`, `script_dirname`, `script_basename`
+    - shell integration: `script_run`, `script_run_capture`
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
 
@@ -96,6 +100,45 @@ section .text:
 Note:
 - These are intentionally scaffold-level primitives to keep behavior deterministic and portable across interpreter/VM/native modes.
 - They are ideal for prototypes and CLI/desktop utility scripts while richer runtime layers evolve.
+
+## Scripting Library
+
+H now includes a dedicated script-oriented stdlib surface under `script_*` builtins.
+This makes H practical for automation, glue scripts, and command-line workflows.
+
+Core capabilities:
+
+- Process arguments:
+  - `script_args_count()`
+  - `script_arg(index)`
+- File-system navigation and path handling:
+  - `script_cwd()`
+  - `script_chdir(path)`
+  - `script_path_join(base, child)`
+  - `script_dirname(path)`
+  - `script_basename(path)`
+- Command execution:
+  - `script_run(command)` returns exit code
+  - `script_run_capture(command)` returns captured stdout/stderr text
+
+Example:
+
+```text
+section .text:
+  fn main():
+    own start = script_cwd()
+    own args_n = script_args_count()
+    own out = script_run_capture("echo hello_from_h")
+
+    if args_n >= 1 and contains(out, "hello_from_h"):
+      return 1
+    return 0
+```
+
+Notes:
+
+- Path-returning script helpers normalize separators for cross-platform script portability.
+- Shell execution uses platform-native dispatch (`cmd /C` on Windows, `sh -c` on Unix-like systems).
 
 ## Hardware Port Ownership (Long Note)
 

@@ -364,3 +364,36 @@ fn parses_and_runs_desktop_starter_api_scaffold_builtins() {
     let result = run_program(&program).expect("runtime should pass");
     assert_eq!(result.render(), "1");
 }
+
+#[test]
+fn parses_and_runs_scripting_library_builtins() {
+    let script_dir = unique_temp_path("script_lib_pipeline");
+    std::fs::create_dir_all(&script_dir).expect("should create temp script dir");
+    let script_dir_h = script_dir.to_string_lossy().replace('\\', "/");
+
+    let src = format!(
+        r#"section .text:
+  fn main():
+    own before = script_cwd()
+    own moved = script_chdir("{}")
+    own now = script_cwd()
+    own joined = script_path_join(now, "tool.txt")
+    own dir = script_dirname(joined)
+    own base = script_basename(joined)
+    own out = script_run_capture("echo script_ok")
+    own code = script_run("echo script_run")
+    own count = script_args_count()
+    own back = script_chdir(before)
+
+    if moved and back and now == "{}" and dir == "{}" and base == "tool.txt" and contains(out, "script_ok") and code == 0 and count >= 1:
+      return 1
+    return 0
+"#,
+        script_dir_h, script_dir_h, script_dir_h
+    );
+
+    let program = parse_source(&src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}

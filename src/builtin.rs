@@ -1,6 +1,8 @@
 use crate::evaluator::Value;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -37,6 +39,15 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "menu" => Some(2),
         "http_get" => Some(1),
         "json_parse" => Some(2),
+        "script_args_count" => Some(0),
+        "script_arg" => Some(1),
+        "script_cwd" => Some(0),
+        "script_chdir" => Some(1),
+        "script_path_join" => Some(2),
+        "script_dirname" => Some(1),
+        "script_basename" => Some(1),
+        "script_run" => Some(1),
+        "script_run_capture" => Some(1),
         _ => None,
     }
 }
@@ -255,6 +266,74 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             let key = str_arg(args, 1)?;
             parse_json_field(json, key).unwrap_or(Value::Maybe)
         }
+        "script_args_count" => Value::Int(std::env::args().count() as i64),
+        "script_arg" => {
+            let idx = int_arg(args, 0)?;
+            if idx < 0 {
+                return Err("script_arg expects non-negative index".to_string());
+            }
+            Value::Str(
+                std::env::args()
+                    .nth(idx as usize)
+                    .unwrap_or_default(),
+            )
+        }
+        "script_cwd" => {
+            let cwd = std::env::current_dir()
+                .map_err(|e| format!("script_cwd failed: {}", e))?;
+            Value::Str(normalize_path(cwd))
+        }
+        "script_chdir" => {
+            let path = str_arg(args, 0)?;
+            std::env::set_current_dir(path)
+                .map_err(|e| format!("script_chdir failed for `{}`: {}", path, e))?;
+            Value::Bool(true)
+        }
+        "script_path_join" => {
+            let base = str_arg(args, 0)?;
+            let child = str_arg(args, 1)?;
+            let joined = Path::new(base).join(child);
+            Value::Str(normalize_path(joined))
+        }
+        "script_dirname" => {
+            let path = str_arg(args, 0)?;
+            let parent = Path::new(path)
+                .parent()
+                .map(normalize_path)
+                .unwrap_or_default();
+            Value::Str(parent)
+        }
+        "script_basename" => {
+            let path = str_arg(args, 0)?;
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            Value::Str(name)
+        }
+        "script_run" => {
+            let command = str_arg(args, 0)?;
+            let status = shell_command(command)
+                .status()
+                .map_err(|e| format!("script_run failed for `{}`: {}", command, e))?;
+            Value::Int(status.code().unwrap_or(-1) as i64)
+        }
+        "script_run_capture" => {
+            let command = str_arg(args, 0)?;
+            let output = shell_command(command)
+                .output()
+                .map_err(|e| format!("script_run_capture failed for `{}`: {}", command, e))?;
+
+            let mut out = String::new();
+            out.push_str(&String::from_utf8_lossy(&output.stdout));
+            out.push_str(&String::from_utf8_lossy(&output.stderr));
+
+            while out.ends_with('\n') || out.ends_with('\r') {
+                out.pop();
+            }
+            Value::Str(out)
+        }
         _ => return Ok(None),
     };
 
@@ -302,6 +381,25 @@ fn value_to_string(value: &Value) -> String {
         Value::Maybe => "maybe".to_string(),
         Value::Ref(v) => format!("&{}", v),
         Value::Unit => "unit".to_string(),
+    }
+}
+
+fn normalize_path(path: impl Into<PathBuf>) -> String {
+    path.into().to_string_lossy().replace('\\', "/")
+}
+
+fn shell_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(command);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
     }
 }
 
