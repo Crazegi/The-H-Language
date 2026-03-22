@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use hl_lexer::{
     analyze, compile_h_to_native_artifacts_with_options, compile_program_with_options,
     disassemble, parse_source, render_contract_report_text, run_bytecode, run_program,
-    CompileOptions, CycleProfile, Lexer, TokenKind,
+    CompileOptions, CycleProfile, Lexer, OptimizationLevel, TokenKind,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -62,6 +62,11 @@ fn main() {
     let mut out_path: Option<String> = None;
     let mut cycle_profile = CycleProfile::Generic;
     let mut contract_report_out: Option<String> = None;
+    let mut opt_level = OptimizationLevel::O2;
+    let mut const_folding = true;
+    let mut peephole = true;
+    let mut fast_math = false;
+    let mut strict_cycle_contracts = true;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -102,12 +107,38 @@ fn main() {
                 contract_report_out = Some(args[i + 1].clone());
                 i += 1;
             }
+            "--opt-level" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected level after --opt-level (0|1|2|3)");
+                    std::process::exit(1);
+                }
+                let value = &args[i + 1];
+                opt_level = match OptimizationLevel::from_str(value) {
+                    Some(v) => v,
+                    None => {
+                        eprintln!("Unknown optimization level `{}`", value);
+                        std::process::exit(1);
+                    }
+                };
+                i += 1;
+            }
+            "--no-const-fold" => const_folding = false,
+            "--no-peephole" => peephole = false,
+            "--fast-math" => fast_math = true,
+            "--relaxed-contracts" => strict_cycle_contracts = false,
             value => path = Some(value.to_string()),
         }
         i += 1;
     }
 
-    let compile_options = CompileOptions { cycle_profile };
+    let compile_options = CompileOptions {
+        cycle_profile,
+        opt_level,
+        const_folding,
+        peephole,
+        fast_math,
+        strict_cycle_contracts,
+    };
 
     let input_path = path.clone();
 

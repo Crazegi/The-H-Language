@@ -13,7 +13,7 @@ pub mod vm;
 pub use bytecode::{disassemble, BytecodeFunction, BytecodeProgram, Instruction};
 pub use compiler::{
 	compile_program, compile_program_with_options, render_contract_report_text, CompileError,
-	CompileOptions, CompileResult, ContractCompileReport, CycleProfile,
+	CompileOptions, CompileResult, ContractCompileReport, CycleProfile, OptimizationLevel,
 };
 pub use error::LexerError;
 pub use evaluator::{run_program, RuntimeError, Value};

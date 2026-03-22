@@ -1,6 +1,7 @@
 use hl_lexer::{
   analyze, compile_program, compile_program_with_options, parse_source,
   render_contract_report_text, run_bytecode, CompileOptions, CycleProfile, Instruction,
+  OptimizationLevel,
 };
 
 const PROGRAM: &str = r#"section .data:
@@ -154,6 +155,7 @@ fn cycle_profile_changes_contract_budget_behavior() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+        ..Default::default()
         },
     )
     .expect("generic profile should compile");
@@ -172,6 +174,7 @@ fn cycle_profile_changes_contract_budget_behavior() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::AvrLike,
+        ..Default::default()
         },
     )
     .expect_err("avr-like profile should overflow");
@@ -200,6 +203,7 @@ fn contract_report_contains_profile_and_padding() {
         &program,
         CompileOptions {
             cycle_profile: CycleProfile::Generic,
+        ..Default::default()
         },
     )
     .expect("compile should pass");
@@ -207,4 +211,107 @@ fn contract_report_contains_profile_and_padding() {
     let text = render_contract_report_text(&compiled.contract_reports);
     assert!(text.contains("profile=generic"));
     assert!(text.contains("padded_nops=3"));
+}
+
+#[test]
+fn optimizer_folds_constant_expressions() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = (2 + 3) * 4
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let unoptimized = compile_program_with_options(
+        &program,
+        CompileOptions {
+            cycle_profile: CycleProfile::Generic,
+            opt_level: OptimizationLevel::O0,
+            const_folding: true,
+            peephole: true,
+            fast_math: false,
+            strict_cycle_contracts: true,
+        },
+    )
+    .expect("compile should pass");
+
+    let optimized = compile_program_with_options(
+        &program,
+        CompileOptions {
+            cycle_profile: CycleProfile::Generic,
+            opt_level: OptimizationLevel::O3,
+            const_folding: true,
+            peephole: true,
+            fast_math: false,
+            strict_cycle_contracts: true,
+        },
+    )
+    .expect("compile should pass");
+
+    let unoptimized_main = unoptimized
+        .bytecode
+        .functions
+        .get("main")
+        .expect("main should exist");
+    let optimized_main = optimized
+        .bytecode
+        .functions
+        .get("main")
+        .expect("main should exist");
+
+    let optimized_has_folded_push = optimized_main
+        .code
+        .iter()
+        .any(|ins| matches!(ins, Instruction::PushInt(20)));
+    assert!(optimized_has_folded_push);
+    assert!(optimized_main.code.len() < unoptimized_main.code.len());
+}
+
+#[test]
+fn relaxed_contract_mode_allows_compile_error_policies() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = 9
+    own r2 = 3
+    contract:
+      cycles: 1
+      on_underflow: "compile_error"
+      on_overflow: "compile_error"
+    execute:
+      mul r1, r2
+      mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+
+    let strict_err = compile_program_with_options(
+        &program,
+        CompileOptions {
+            cycle_profile: CycleProfile::Generic,
+            opt_level: OptimizationLevel::O2,
+            const_folding: true,
+            peephole: true,
+            fast_math: false,
+            strict_cycle_contracts: true,
+        },
+    )
+    .expect_err("strict mode should fail");
+    assert!(strict_err.message.contains("overflow"));
+
+    let relaxed_ok = compile_program_with_options(
+        &program,
+        CompileOptions {
+            cycle_profile: CycleProfile::Generic,
+            opt_level: OptimizationLevel::O2,
+            const_folding: true,
+            peephole: true,
+            fast_math: false,
+            strict_cycle_contracts: false,
+        },
+    );
+    assert!(relaxed_ok.is_ok());
 }

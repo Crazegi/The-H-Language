@@ -144,6 +144,26 @@ cargo run --bin hl-lex -- --compile examples/advanced.hl --out out.hbc.txt
 cargo run --bin hl-lex -- --compile examples/advanced.hl --cycle-profile avr-like --contract-report contract_report.txt --out out.hbc.txt
 ```
 
+### Performance And Tuning Options
+
+The compiler now supports speed and behavior tuning flags:
+
+- `--opt-level 0|1|2|3`
+  - `0`: minimal optimization
+  - `1`: enables constant folding
+  - `2`: constant folding + peephole cleanup (default)
+  - `3`: aggressive enabled optimizations
+- `--no-const-fold` disables compile-time expression folding
+- `--no-peephole` disables bytecode peephole cleanup
+- `--fast-math` relaxes strict constant math handling
+- `--relaxed-contracts` disables strict compile-error enforcement for contract overflow/underflow policies
+
+Example: high-speed compile with aggressive options and profile report
+
+```powershell
+cargo run --bin hl-lex -- --compile examples/cycle_contracts.hl --opt-level 3 --cycle-profile cortex-m0-like --fast-math --contract-report fast_report.txt --out fast.hbc.txt
+```
+
 ### Run On VM
 
 ```powershell
