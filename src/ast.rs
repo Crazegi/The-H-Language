@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct Program {
     pub data: BTreeMap<String, Expr>,
+    pub imports: Vec<String>,
     pub functions: Vec<Function>,
 }
 

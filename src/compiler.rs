@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::ast::{
     BinaryOp, ContractPolicy, Expr, Instruction as AstInstruction, Program, Stmt, UnaryOp,
 };
+use crate::builtin::normalize_builtin_name;
 use crate::bytecode::{BytecodeFunction, BytecodeProgram, Instruction};
 use crate::evaluator::Value;
 
@@ -1190,7 +1191,9 @@ impl FunctionCompiler {
                 for arg in args {
                     self.compile_expr(arg)?;
                 }
-                self.code.push(Instruction::Call(name.clone(), args.len()));
+                let lowered_name = normalize_builtin_name(name).unwrap_or_else(|| name.clone());
+                self.code
+                    .push(Instruction::Call(lowered_name, args.len()));
             }
         }
         Ok(())

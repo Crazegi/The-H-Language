@@ -311,6 +311,7 @@ impl Lexer {
         let mut kind = match lower.as_str() {
             "section" => TokenKind::KeywordSection,
             "fn" => TokenKind::KeywordFn,
+            "import" | "textimport" => TokenKind::KeywordImport,
             "interrupt" => TokenKind::KeywordInterrupt,
             "own" => TokenKind::KeywordOwn,
             "ref" => TokenKind::KeywordRef,

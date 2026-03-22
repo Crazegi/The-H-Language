@@ -7,7 +7,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn builtin_arity(name: &str) -> Option<usize> {
-    match name {
+    let resolved = namespaced_to_builtin(name).unwrap_or(name);
+    match resolved {
         "abs" => Some(1),
         "sqrt" => Some(1),
         "floor" => Some(1),
@@ -114,6 +115,36 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
     }
 }
 
+pub fn is_known_builtin_module(module: &str) -> bool {
+    matches!(
+        module,
+        "math"
+            | "string"
+            | "collections"
+            | "convert"
+            | "logic"
+            | "hardware"
+            | "gpio"
+            | "uart"
+            | "spi"
+            | "i2c"
+            | "timer"
+            | "watchdog"
+            | "dma"
+            | "desktop"
+            | "script"
+    )
+}
+
+pub fn normalize_builtin_name(name: &str) -> Option<String> {
+    let resolved = namespaced_to_builtin(name).unwrap_or(name);
+    if builtin_arity(resolved).is_some() {
+        Some(resolved.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {
     fn int_arg(args: &[Value], idx: usize) -> Result<i64, String> {
         match args.get(idx) {
@@ -136,7 +167,8 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
         to_logic(value)
     }
 
-    let out = match name {
+    let resolved = namespaced_to_builtin(name).unwrap_or(name);
+    let out = match resolved {
         "abs" => Value::Int(int_arg(args, 0)?.abs()),
         "sqrt" => {
             let n = int_arg(args, 0)?;
@@ -794,6 +826,115 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
     };
 
     Ok(Some(out))
+}
+
+fn namespaced_to_builtin(name: &str) -> Option<&'static str> {
+    let (module, symbol) = name.split_once('.')?;
+    match (module, symbol) {
+        ("math", "abs") => Some("abs"),
+        ("math", "sqrt") => Some("sqrt"),
+        ("math", "floor") => Some("floor"),
+        ("math", "ceil") => Some("ceil"),
+        ("math", "round") => Some("round"),
+        ("math", "trunc") => Some("trunc"),
+        ("math", "frac") => Some("frac"),
+        ("math", "snap") => Some("snap"),
+        ("math", "log2") => Some("log2"),
+        ("math", "log10") => Some("log10"),
+        ("math", "ln") => Some("ln"),
+        ("math", "exp") => Some("exp"),
+        ("math", "sin") => Some("sin"),
+        ("math", "cos") => Some("cos"),
+        ("math", "tan") => Some("tan"),
+        ("math", "asin") => Some("asin"),
+        ("math", "acos") => Some("acos"),
+        ("math", "atan") => Some("atan"),
+        ("math", "atan2") => Some("atan2"),
+        ("math", "gcd") => Some("gcd"),
+        ("math", "lcm") => Some("lcm"),
+        ("math", "is_prime") => Some("is_prime"),
+        ("math", "next_pow2") => Some("next_pow2"),
+        ("math", "popcount") => Some("popcount"),
+        ("math", "leading_zeros") => Some("leading_zeros"),
+        ("math", "trailing_zeros") => Some("trailing_zeros"),
+        ("math", "bit_reverse") => Some("bit_reverse"),
+        ("math", "min") => Some("min"),
+        ("math", "max") => Some("max"),
+        ("math", "pow") => Some("pow"),
+        ("math", "clamp") => Some("clamp"),
+        ("string", "len") => Some("len"),
+        ("string", "upper") => Some("upper"),
+        ("string", "lower") => Some("lower"),
+        ("string", "contains") => Some("contains"),
+        ("string", "split") => Some("split"),
+        ("string", "join") => Some("join"),
+        ("string", "trim") => Some("trim"),
+        ("string", "replace") => Some("replace"),
+        ("collections", "array_new") => Some("array_new"),
+        ("collections", "array_len") => Some("array_len"),
+        ("collections", "array_push") => Some("array_push"),
+        ("collections", "array_get") => Some("array_get"),
+        ("collections", "queue_new") => Some("queue_new"),
+        ("collections", "queue_len") => Some("queue_len"),
+        ("collections", "queue_push") => Some("queue_push"),
+        ("collections", "queue_peek") => Some("queue_peek"),
+        ("collections", "queue_pop") => Some("queue_pop"),
+        ("collections", "ring_new") => Some("ring_new"),
+        ("collections", "ring_len") => Some("ring_len"),
+        ("collections", "ring_push") => Some("ring_push"),
+        ("collections", "ring_peek") => Some("ring_peek"),
+        ("convert", "to_int") => Some("to_int"),
+        ("convert", "to_bool") => Some("to_bool"),
+        ("convert", "to_float") => Some("to_float"),
+        ("convert", "to_string") => Some("to_string"),
+        ("convert", "to_float_string") => Some("to_float_string"),
+        ("logic", "phase") => Some("phase"),
+        ("logic", "collapse") => Some("collapse"),
+        ("hardware", "sleep_until") => Some("sleep_until"),
+        ("gpio", "claim") => Some("gpio_claim"),
+        ("gpio", "mode") => Some("gpio_mode"),
+        ("gpio", "write") => Some("gpio_write"),
+        ("gpio", "read") => Some("gpio_read"),
+        ("uart", "new") => Some("uart_new"),
+        ("uart", "write") => Some("uart_write"),
+        ("uart", "read") => Some("uart_read"),
+        ("spi", "new") => Some("spi_new"),
+        ("spi", "transfer") => Some("spi_transfer"),
+        ("i2c", "new") => Some("i2c_new"),
+        ("i2c", "write") => Some("i2c_write"),
+        ("i2c", "read") => Some("i2c_read"),
+        ("timer", "new") => Some("timer_new"),
+        ("timer", "start") => Some("timer_start"),
+        ("timer", "elapsed") => Some("timer_elapsed"),
+        ("watchdog", "new") => Some("watchdog_new"),
+        ("watchdog", "feed") => Some("watchdog_feed"),
+        ("dma", "new") => Some("dma_new"),
+        ("dma", "transfer") => Some("dma_transfer"),
+        ("desktop", "input") => Some("input"),
+        ("desktop", "read_text") => Some("read_text"),
+        ("desktop", "write_text") => Some("write_text"),
+        ("desktop", "append_text") => Some("append_text"),
+        ("desktop", "exists") => Some("exists"),
+        ("desktop", "delete_file") => Some("delete_file"),
+        ("desktop", "env") => Some("env"),
+        ("desktop", "sleep_ms") => Some("sleep_ms"),
+        ("desktop", "now_ms") => Some("now_ms"),
+        ("desktop", "rand_int") => Some("rand_int"),
+        ("desktop", "window_loop") => Some("window_loop"),
+        ("desktop", "menu") => Some("menu"),
+        ("desktop", "http_get") => Some("http_get"),
+        ("desktop", "json_parse") => Some("json_parse"),
+        ("script", "args_count") => Some("script_args_count"),
+        ("script", "arg") => Some("script_arg"),
+        ("script", "cwd") => Some("script_cwd"),
+        ("script", "chdir") => Some("script_chdir"),
+        ("script", "path_join") => Some("script_path_join"),
+        ("script", "dirname") => Some("script_dirname"),
+        ("script", "basename") => Some("script_basename"),
+        ("script", "run") => Some("script_run"),
+        ("script", "run_capture") => Some("script_run_capture"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

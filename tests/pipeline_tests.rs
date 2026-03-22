@@ -254,6 +254,38 @@ fn parses_and_runs_extended_math_and_bit_builtins() {
 }
 
 #[test]
+fn parses_and_runs_imported_namespaced_builtins() {
+    let src = r#"section .text:
+  import math
+
+  fn main():
+    own value = math.snap(15, 8)
+    own theta = math.atan2(1, 0)
+    if value == 16 and theta == 90000:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn semantic_rejects_namespaced_builtin_without_import() {
+    let src = r#"section .text:
+  fn main():
+    own value = math.snap(15, 8)
+    return value
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("missing import should fail semantic analysis");
+    assert!(err.message.contains("not imported"));
+}
+
+#[test]
 fn rejects_invalid_cycle_contract_policy() {
     let src = r#"section .text:
   fn main():

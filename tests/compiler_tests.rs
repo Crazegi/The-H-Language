@@ -331,6 +331,31 @@ fn vm_executes_extended_math_and_bit_builtins() {
 }
 
 #[test]
+fn vm_executes_imported_namespaced_builtins() {
+    let src = r#"section .text:
+  import math
+  import gpio
+
+  fn main():
+    own pin = gpio.claim("[port_a]")
+    own _cfg = gpio.mode(pin, "out")
+    own ok = gpio.write(pin, 1)
+    own angle = math.atan2(1, 1)
+    own rounded = math.round(to_float("2.600"))
+
+    if ok and angle >= 44999 and angle <= 45001 and rounded == 3:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():

@@ -37,6 +37,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 ## Implemented Features
 
 - Sections: `section .data:` and `section .text:`
+- Stdlib imports: `import math`, `import gpio`, etc. (inside `section .text:`)
 - Functions: `fn name(a, b):` with indentation-based blocks
 - Ownership/borrowing: `own` and `ref`
 - Hardware port ownership: `own [port_a]`, `ref [port_a]`, and `ref alias = &[port_a]`
@@ -75,6 +76,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
     - process args: `script_args_count`, `script_arg`
     - working directory/path: `script_cwd`, `script_chdir`, `script_path_join`, `script_dirname`, `script_basename`
     - shell integration: `script_run`, `script_run_capture`
+  - namespaced call style is supported with imports, e.g. `math.atan2(y, x)`, `gpio.claim("[port_a]")`
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
 

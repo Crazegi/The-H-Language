@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinaryOp, Expr, Program, Stmt};
-use crate::builtin::builtin_arity;
+use crate::builtin::{builtin_arity, is_known_builtin_module, normalize_builtin_name};
 
 #[derive(Debug, Clone)]
 pub struct SemanticError {
@@ -25,6 +25,22 @@ impl std::fmt::Display for SemanticError {
 impl std::error::Error for SemanticError {}
 
 pub fn analyze(program: &Program) -> Result<(), SemanticError> {
+    let mut imported_modules: HashSet<String> = HashSet::new();
+    for module in &program.imports {
+        if !is_known_builtin_module(module) {
+            return Err(SemanticError::new(format!(
+                "Unknown import module `{}`",
+                module
+            )));
+        }
+        if !imported_modules.insert(module.clone()) {
+            return Err(SemanticError::new(format!(
+                "Duplicate import `{}`",
+                module
+            )));
+        }
+    }
+
     let mut signatures: HashMap<String, usize> = HashMap::new();
     let mut interrupt_names: HashSet<String> = HashSet::new();
     for f in &program.functions {
@@ -115,6 +131,7 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
                 &interrupt_names,
                 &program.data,
                 &signatures,
+                &imported_modules,
             )?;
         }
     }
@@ -134,6 +151,7 @@ fn analyze_stmt(
     interrupt_names: &HashSet<String>,
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
+    imported_modules: &HashSet<String>,
 ) -> Result<(), SemanticError> {
     match stmt {
         Stmt::OwnDecl { name, expr } => {
@@ -143,7 +161,7 @@ fn analyze_stmt(
                     name
                 )));
             }
-            analyze_expr(expr, symbols, data, signatures)?;
+            analyze_expr(expr, symbols, data, signatures, imported_modules)?;
             symbols.insert(name.clone());
         }
         Stmt::RefDecl { name, target } => {
@@ -231,6 +249,7 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
         }
@@ -247,7 +266,7 @@ fn analyze_stmt(
                     name
                 )));
             }
-            analyze_expr(expr, symbols, data, signatures)?;
+            analyze_expr(expr, symbols, data, signatures, imported_modules)?;
         }
         Stmt::Instruction { target, rhs, .. } => {
             if let Some(port) = memory_target_name(target) {
@@ -269,14 +288,14 @@ fn analyze_stmt(
                     target
                 )));
             }
-            analyze_expr(rhs, symbols, data, signatures)?;
+            analyze_expr(rhs, symbols, data, signatures, imported_modules)?;
         }
         Stmt::If {
             condition,
             then_body,
             else_body,
         } => {
-            analyze_expr(condition, symbols, data, signatures)?;
+            analyze_expr(condition, symbols, data, signatures, imported_modules)?;
             for s in then_body {
                 analyze_stmt(
                     s,
@@ -290,6 +309,7 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
             for s in else_body {
@@ -305,11 +325,12 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
         }
         Stmt::While { condition, body } => {
-            analyze_expr(condition, symbols, data, signatures)?;
+            analyze_expr(condition, symbols, data, signatures, imported_modules)?;
             for s in body {
                 analyze_stmt(
                     s,
@@ -323,11 +344,12 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
         }
         Stmt::Repeat { times, body } => {
-            analyze_expr(times, symbols, data, signatures)?;
+            analyze_expr(times, symbols, data, signatures, imported_modules)?;
             for s in body {
                 analyze_stmt(
                     s,
@@ -341,6 +363,7 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
         }
@@ -366,20 +389,21 @@ fn analyze_stmt(
                     interrupt_names,
                     data,
                     signatures,
+                    imported_modules,
                 )?;
             }
         }
         Stmt::PrintBlock(fields) => {
             for (_, expr) in fields {
-                analyze_expr(expr, symbols, data, signatures)?;
+                analyze_expr(expr, symbols, data, signatures, imported_modules)?;
             }
         }
         Stmt::Return(expr) => {
             if let Some(e) = expr {
-                analyze_expr(e, symbols, data, signatures)?;
+                analyze_expr(e, symbols, data, signatures, imported_modules)?;
             }
         }
-        Stmt::Expr(expr) => analyze_expr(expr, symbols, data, signatures)?,
+        Stmt::Expr(expr) => analyze_expr(expr, symbols, data, signatures, imported_modules)?,
     }
     Ok(())
 }
@@ -389,6 +413,7 @@ fn analyze_expr(
     symbols: &HashSet<String>,
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
+    imported_modules: &HashSet<String>,
 ) -> Result<(), SemanticError> {
     match expr {
         Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe => Ok(()),
@@ -402,10 +427,10 @@ fn analyze_expr(
                 )))
             }
         }
-        Expr::Unary { rhs, .. } => analyze_expr(rhs, symbols, data, signatures),
+        Expr::Unary { rhs, .. } => analyze_expr(rhs, symbols, data, signatures, imported_modules),
         Expr::Binary { left, right, op } => {
-            analyze_expr(left, symbols, data, signatures)?;
-            analyze_expr(right, symbols, data, signatures)?;
+            analyze_expr(left, symbols, data, signatures, imported_modules)?;
+            analyze_expr(right, symbols, data, signatures, imported_modules)?;
             if matches!(op, BinaryOp::Div | BinaryOp::Mod)
                 && matches!(right.as_ref(), Expr::Number(0))
             {
@@ -414,10 +439,19 @@ fn analyze_expr(
             Ok(())
         }
         Expr::Call { name, args } => {
+            if let Some((module, _)) = name.split_once('.') {
+                if !imported_modules.contains(module) {
+                    return Err(SemanticError::new(format!(
+                        "Module `{}` is not imported (add `import {}`)",
+                        module, module
+                    )));
+                }
+            }
+
             let expected = if let Some(v) = signatures.get(name) {
                 *v
-            } else if let Some(v) = builtin_arity(name) {
-                v
+            } else if let Some(normalized) = normalize_builtin_name(name) {
+                builtin_arity(&normalized).unwrap_or(usize::MAX)
             } else {
                 return Err(SemanticError::new(format!(
                     "Call to unknown function `{}`",
@@ -434,7 +468,7 @@ fn analyze_expr(
                 )));
             }
             for a in args {
-                analyze_expr(a, symbols, data, signatures)?;
+                analyze_expr(a, symbols, data, signatures, imported_modules)?;
             }
             Ok(())
         }

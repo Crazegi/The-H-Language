@@ -56,6 +56,7 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut data = BTreeMap::new();
+        let mut imports = Vec::new();
         let mut functions = Vec::new();
 
         self.skip_newlines();
@@ -87,7 +88,11 @@ impl Parser {
                         if self.check(TokenKind::Dedent) {
                             break;
                         }
-                        functions.push(self.parse_function()?);
+                        if self.match_kind(TokenKind::KeywordImport) {
+                            imports.push(self.parse_import_stmt()?);
+                        } else {
+                            functions.push(self.parse_function()?);
+                        }
                     }
                 }
                 _ => {
@@ -102,7 +107,19 @@ impl Parser {
             self.skip_newlines();
         }
 
-        Ok(Program { data, functions })
+        Ok(Program {
+            data,
+            imports,
+            functions,
+        })
+    }
+
+    fn parse_import_stmt(&mut self) -> Result<String, ParseError> {
+        let module = self
+            .expect_identifier_like("Expected module name after `import`")?
+            .lexeme;
+        self.consume_stmt_terminator();
+        Ok(module)
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {
@@ -304,15 +321,34 @@ impl Parser {
 
         if self.check(TokenKind::Identifier) || self.check(TokenKind::Register) {
             let name = self.advance().lexeme.clone();
+            let qualified = self.parse_qualified_name(name)?;
             if self.match_kind(TokenKind::Assign) {
+                if qualified.contains('.') {
+                    return Err(ParseError::new(
+                        self.peek(),
+                        "Qualified names cannot be assignment targets",
+                    ));
+                }
                 let expr = self.parse_expression()?;
                 self.consume_stmt_terminator();
-                return Ok(Stmt::Assign { name, expr });
+                return Ok(Stmt::Assign {
+                    name: qualified,
+                    expr,
+                });
             }
             if self.match_kind(TokenKind::LParen) {
                 let args = self.parse_call_args()?;
                 self.consume_stmt_terminator();
-                return Ok(Stmt::Expr(Expr::Call { name, args }));
+                return Ok(Stmt::Expr(Expr::Call {
+                    name: qualified,
+                    args,
+                }));
+            }
+            if qualified.contains('.') {
+                return Err(ParseError::new(
+                    self.peek(),
+                    "Qualified names must be used as function calls",
+                ));
             }
             return Err(ParseError::new(
                 self.peek(),
@@ -585,10 +621,15 @@ impl Parser {
             TokenKind::KeywordFalse => Ok(Expr::Bool(false)),
             TokenKind::KeywordMaybe => Ok(Expr::Maybe),
             TokenKind::Identifier | TokenKind::Register => {
-                let name = tok.lexeme;
+                let name = self.parse_qualified_name(tok.lexeme)?;
                 if self.match_kind(TokenKind::LParen) {
                     let args = self.parse_call_args()?;
                     Ok(Expr::Call { name, args })
+                } else if name.contains('.') {
+                    Err(ParseError::new(
+                        self.peek(),
+                        "Qualified names must be used as function calls",
+                    ))
                 } else {
                     Ok(Expr::Var(name))
                 }
@@ -616,6 +657,18 @@ impl Parser {
         } else {
             Err(ParseError::new(self.peek(), message))
         }
+    }
+
+    fn parse_qualified_name(&mut self, base: String) -> Result<String, ParseError> {
+        let mut name = base;
+        while self.match_kind(TokenKind::Dot) {
+            let seg = self
+                .expect_identifier_like("Expected identifier after `.`")?
+                .lexeme;
+            name.push('.');
+            name.push_str(&seg);
+        }
+        Ok(name)
     }
 
     fn parse_instruction_target(&mut self) -> Result<String, ParseError> {
