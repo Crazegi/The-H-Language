@@ -1,0 +1,152 @@
+{
+  "name": "H Language",
+  "scopeName": "source.hlang",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#sections"
+    },
+    {
+      "include": "#functionDecl"
+    },
+    {
+      "include": "#printKeys"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#mnemonics"
+    },
+    {
+      "include": "#registers"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.hlang",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.hlang",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.hlang",
+          "match": "\\\\(?:[ntr\\\"'])"
+        }
+      ]
+    },
+    "sections": {
+      "patterns": [
+        {
+          "name": "meta.section.hlang",
+          "match": "\\b(section)\\s+(\\.[A-Za-z_][A-Za-z0-9_]*)\\s*(:|\\{)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.section.hlang"
+            },
+            "2": {
+              "name": "entity.name.namespace.hlang"
+            },
+            "3": {
+              "name": "punctuation.separator.block.hlang"
+            }
+          }
+        }
+      ]
+    },
+    "functionDecl": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.hlang",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.control.function.hlang"
+            },
+            "2": {
+              "name": "entity.name.function.hlang"
+            },
+            "3": {
+              "name": "punctuation.section.group.begin.hlang"
+            }
+          }
+        }
+      ]
+    },
+    "printKeys": {
+      "patterns": [
+        {
+          "name": "meta.print.key.hlang",
+          "match": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*:)",
+          "captures": {
+            "2": {
+              "name": "variable.other.member.hlang"
+            },
+            "3": {
+              "name": "punctuation.separator.key-value.hlang"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "name": "keyword.control.hlang",
+      "match": "\\b(section|fn|own|ref|print|if|else|while|return)\\b"
+    },
+    "types": {
+      "name": "storage.type.hlang",
+      "match": "\\b(int|string|bool)\\b"
+    },
+    "mnemonics": {
+      "name": "support.function.instruction.hlang",
+      "match": "\\b(add|mov|cmp|sub|mul|div|mod|jmp|jne|je|call|ret)\\b"
+    },
+    "registers": {
+      "name": "variable.other.register.hlang",
+      "match": "\\b[rR][0-9]+\\b"
+    },
+    "numbers": {
+      "name": "constant.numeric.integer.hlang",
+      "match": "\\b[0-9]+\\b"
+    },
+    "booleans": {
+      "name": "constant.language.boolean.hlang",
+      "match": "\\b(true|false)\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.hlang",
+      "match": "==|!=|<=|>=|=|<|>|\\+|-|\\*|/|%|&|:|,|;|\\."
+    },
+    "identifiers": {
+      "name": "variable.other.hlang",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

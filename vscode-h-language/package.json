@@ -1,0 +1,41 @@
+{
+  "name": "h-language-support",
+  "displayName": "H Language Support",
+  "description": "Syntax highlighting and editor support for the H programming language (.hl)",
+  "version": "0.1.0",
+  "publisher": "crazegi",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "h-lang",
+        "aliases": [
+          "H",
+          "H-lang"
+        ],
+        "extensions": [
+          ".hl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "h-lang",
+        "scopeName": "source.hlang",
+        "path": "./syntaxes/h.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "h-lang",
+        "path": "./snippets/h.json"
+      }
+    ]
+  }
+}

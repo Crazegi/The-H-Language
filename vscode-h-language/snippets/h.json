@@ -1,0 +1,44 @@
+{
+  "H Program Skeleton": {
+    "prefix": "hmain",
+    "body": [
+      "section .data:",
+      "  name: \"Engine\"",
+      "",
+      "section .text:",
+      "  fn main() {",
+      "    int r1 = 45;",
+      "    int r2 = 15;",
+      "    add r1, r2;",
+      "    print:",
+      "      event: \"diagnostic\"",
+      "      sensor: name",
+      "      reading: r1",
+      "    return r1;",
+      "  }"
+    ],
+    "description": "Insert an H-language starter program"
+  },
+  "H Print Block": {
+    "prefix": "hprint",
+    "body": [
+      "print:",
+      "  event: \"${1:diagnostic}\"",
+      "  sensor: ${2:label}",
+      "  reading: ${3:r1}",
+      "  status: \"${4:stable}\""
+    ],
+    "description": "Insert a structured H print block"
+  },
+  "H Java Style If": {
+    "prefix": "hif",
+    "body": [
+      "if (${1:condition}) {",
+      "  ${2:// body}",
+      "} else {",
+      "  ${3:// else}",
+      "}"
+    ],
+    "description": "Insert a Java-style if/else block"
+  }
+}
