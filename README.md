@@ -23,6 +23,7 @@ This repository now contains a complete end-to-end prototype for H (`.hl`) in Ru
 	- `bool ok = true;`
 - Assembly-flavored instructions:
 	- `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
+	- memory-mapped operand form for `mov`: `mov [port_a], r1`
 - Expressions:
 	- arithmetic: `+ - * / %`
 	- comparisons: `== != < <= > >=`
@@ -39,6 +40,11 @@ This repository now contains a complete end-to-end prototype for H (`.hl`) in Ru
 	- `while`
 	- `repeat n` (counted loop)
 	- `return`
+- Cycle Contracts (deterministic execute blocks):
+	- `contract:` metadata with `cycles`, `on_underflow`, `on_overflow`
+	- `execute:` block for cycle-counted instructions
+	- compile-time overflow errors and underflow `nop` padding
+	- cycle profiles: `generic`, `avr-like`, `cortex-m0-like`
 - Structured native print blocks:
 	- `print:` followed by YAML-style key-value lines
 
@@ -68,6 +74,12 @@ Compile to bytecode listing:
 cargo run --bin hl-lex -- --compile examples/advanced.hl --out out.hbc.txt
 ```
 
+Compile with a cycle profile and emit a cycle contract report artifact:
+
+```powershell
+cargo run --bin hl-lex -- --compile examples/advanced.hl --cycle-profile avr-like --contract-report contract_report.txt --out out.hbc.txt
+```
+
 Compile H source with object + link pipeline (`.obj` then `.exe`):
 
 ```powershell
@@ -81,7 +93,7 @@ This mode now emits:
 Run compiled bytecode in VM:
 
 ```powershell
-cargo run --bin hl-lex -- --vm examples/advanced.hl
+cargo run --bin hl-lex -- --vm examples/advanced.hl --cycle-profile cortex-m0-like
 ```
 
 Run tests:

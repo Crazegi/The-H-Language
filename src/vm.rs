@@ -225,6 +225,7 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
                 println!("  {}: {}", key, value.render());
             }
             Instruction::PrintEnd => {}
+            Instruction::Nop => {}
             Instruction::Pop => {
                 let _ = pop(&mut frame.stack)?;
             }

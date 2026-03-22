@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::bytecode::{BytecodeProgram, Instruction};
-use crate::compiler::compile_program;
+use crate::compiler::{compile_program_with_options, CompileOptions};
 use crate::evaluator::Value;
 use crate::parser::parse_source;
 use crate::semantic::analyze;
@@ -41,16 +41,33 @@ pub fn compile_h_to_native_binary(source: &str, output_path: &Path) -> Result<Pa
     Ok(artifacts.executable_path)
 }
 
+pub fn compile_h_to_native_binary_with_options(
+    source: &str,
+    output_path: &Path,
+    options: CompileOptions,
+) -> Result<PathBuf, NativeCompileError> {
+    let artifacts = compile_h_to_native_artifacts_with_options(source, output_path, options)?;
+    Ok(artifacts.executable_path)
+}
+
 pub fn compile_h_to_native_artifacts(
     source: &str,
     output_path: &Path,
 ) -> Result<NativeBuildArtifacts, NativeCompileError> {
+    compile_h_to_native_artifacts_with_options(source, output_path, CompileOptions::default())
+}
+
+pub fn compile_h_to_native_artifacts_with_options(
+    source: &str,
+    output_path: &Path,
+    options: CompileOptions,
+) -> Result<NativeBuildArtifacts, NativeCompileError> {
     let program = parse_source(source).map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
     analyze(&program).map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
-    let bytecode = compile_program(&program)
+    let bytecode = compile_program_with_options(&program, options)
         .map_err(|e| NativeCompileError::new(format!("Compile error: {}", e)))?;
 
-    let rust_runtime_source = generate_rust_runtime_module(&bytecode);
+    let rust_runtime_source = generate_rust_runtime_module(&bytecode.bytecode);
     let rust_runtime_file = output_path.with_extension("runtime.rs");
     std::fs::write(&rust_runtime_file, rust_runtime_source)
         .map_err(|e| NativeCompileError::new(format!("Failed to write generated source: {}", e)))?;
@@ -156,7 +173,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, And, Or, Xor, Neg, Not, Cmp3,\n");
     out.push_str("  Jump(usize), JumpIfFalse(usize),\n");
     out.push_str("  Call(String, usize),\n");
-    out.push_str("  PrintBegin, PrintField(String), PrintEnd, Pop, Return,\n");
+    out.push_str("  PrintBegin, PrintField(String), PrintEnd, Nop, Pop, Return,\n");
     out.push_str("}\n\n");
 
     out.push_str("#[derive(Clone)]\n");
@@ -299,6 +316,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("      Instruction::PrintBegin => println!(\"print:\"),\n");
     out.push_str("      Instruction::PrintField(k) => { let v = pop(&mut stack)?; println!(\"  {}: {}\", k, render(&v)); },\n");
     out.push_str("      Instruction::PrintEnd => {},\n");
+    out.push_str("      Instruction::Nop => {},\n");
     out.push_str("      Instruction::Pop => { let _ = pop(&mut stack)?; },\n");
     out.push_str("      Instruction::Return => { return Ok(stack.pop().unwrap_or(Value::Unit)); },\n");
     out.push_str("    }\n");
@@ -416,6 +434,7 @@ fn instruction_to_rust(ins: &Instruction) -> String {
         Instruction::PrintBegin => "Instruction::PrintBegin".to_string(),
         Instruction::PrintField(v) => format!("Instruction::PrintField({:?}.to_string())", v),
         Instruction::PrintEnd => "Instruction::PrintEnd".to_string(),
+        Instruction::Nop => "Instruction::Nop".to_string(),
         Instruction::Pop => "Instruction::Pop".to_string(),
         Instruction::Return => "Instruction::Return".to_string(),
     }

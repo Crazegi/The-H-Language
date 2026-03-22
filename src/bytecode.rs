@@ -50,6 +50,7 @@ pub enum Instruction {
     PrintBegin,
     PrintField(String),
     PrintEnd,
+    Nop,
     Pop,
     Return,
 }

@@ -11,12 +11,16 @@ pub mod token;
 pub mod vm;
 
 pub use bytecode::{disassemble, BytecodeFunction, BytecodeProgram, Instruction};
-pub use compiler::{compile_program, CompileError};
+pub use compiler::{
+	compile_program, compile_program_with_options, render_contract_report_text, CompileError,
+	CompileOptions, CompileResult, ContractCompileReport, CycleProfile,
+};
 pub use error::LexerError;
 pub use evaluator::{run_program, RuntimeError, Value};
 pub use lexer::Lexer;
 pub use native::{
-	compile_h_to_native_artifacts, compile_h_to_native_binary, NativeBuildArtifacts,
+	compile_h_to_native_artifacts, compile_h_to_native_artifacts_with_options,
+	compile_h_to_native_binary, compile_h_to_native_binary_with_options, NativeBuildArtifacts,
 	NativeCompileError,
 };
 pub use parser::{parse_source, ParseError, Parser};

@@ -3,8 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use hl_lexer::{
-    analyze, compile_h_to_native_artifacts, compile_program, disassemble, parse_source,
-    run_bytecode, run_program, Lexer, TokenKind,
+    analyze, compile_h_to_native_artifacts_with_options, compile_program_with_options,
+    disassemble, parse_source, render_contract_report_text, run_bytecode, run_program,
+    CompileOptions, CycleProfile, Lexer, TokenKind,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -59,6 +60,8 @@ fn main() {
     let mut mode = Mode::Run;
     let mut path: Option<String> = None;
     let mut out_path: Option<String> = None;
+    let mut cycle_profile = CycleProfile::Generic;
+    let mut contract_report_out: Option<String> = None;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -76,10 +79,35 @@ fn main() {
                 out_path = Some(args[i + 1].clone());
                 i += 1;
             }
+            "--cycle-profile" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected profile after --cycle-profile (generic|avr-like|cortex-m0-like)");
+                    std::process::exit(1);
+                }
+                let value = &args[i + 1];
+                cycle_profile = match CycleProfile::from_str(value) {
+                    Some(v) => v,
+                    None => {
+                        eprintln!("Unknown cycle profile `{}`", value);
+                        std::process::exit(1);
+                    }
+                };
+                i += 1;
+            }
+            "--contract-report" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Expected file path after --contract-report");
+                    std::process::exit(1);
+                }
+                contract_report_out = Some(args[i + 1].clone());
+                i += 1;
+            }
             value => path = Some(value.to_string()),
         }
         i += 1;
     }
+
+    let compile_options = CompileOptions { cycle_profile };
 
     let input_path = path.clone();
 
@@ -140,13 +168,14 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let bytecode = match compile_program(&program) {
+            let compiled = match compile_program_with_options(&program, compile_options.clone()) {
                 Ok(bc) => bc,
                 Err(err) => {
                     eprintln!("Compile error: {}", err);
                     std::process::exit(1);
                 }
             };
+            let bytecode = compiled.bytecode;
 
             let disasm = disassemble(&bytecode);
             if let Some(path) = out_path {
@@ -157,6 +186,15 @@ fn main() {
                 println!("compiled_output: {}", path);
             } else {
                 println!("{}", disasm);
+            }
+
+            if let Some(path) = contract_report_out.as_ref() {
+                let text = render_contract_report_text(&compiled.contract_reports);
+                if let Err(err) = fs::write(path, text) {
+                    eprintln!("Failed to write {}: {}", path, err);
+                    std::process::exit(1);
+                }
+                println!("contract_report: {}", path);
             }
         }
         Mode::Vm => {
@@ -173,13 +211,23 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let bytecode = match compile_program(&program) {
+            let compiled = match compile_program_with_options(&program, compile_options.clone()) {
                 Ok(bc) => bc,
                 Err(err) => {
                     eprintln!("Compile error: {}", err);
                     std::process::exit(1);
                 }
             };
+            let bytecode = compiled.bytecode;
+
+            if let Some(path) = contract_report_out.as_ref() {
+                let text = render_contract_report_text(&compiled.contract_reports);
+                if let Err(err) = fs::write(path, text) {
+                    eprintln!("Failed to write {}: {}", path, err);
+                    std::process::exit(1);
+                }
+                println!("contract_report: {}", path);
+            }
 
             match run_bytecode(&bytecode) {
                 Ok(value) => println!("program_return: {}", value.render()),
@@ -232,7 +280,7 @@ fn main() {
                 }
             };
 
-            match compile_h_to_native_artifacts(&input, &bin_path) {
+            match compile_h_to_native_artifacts_with_options(&input, &bin_path, compile_options) {
                 Ok(artifacts) => {
                     println!("native_object: {}", artifacts.object_path.display());
                     println!("native_binary: {}", artifacts.executable_path.display());

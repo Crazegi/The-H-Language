@@ -142,6 +142,11 @@ fn analyze_stmt(
                 return Err(SemanticError::new("Cycle contract `cycles` must be > 0"));
             }
             for s in body {
+                if !matches!(s, Stmt::Instruction { .. }) {
+                    return Err(SemanticError::new(
+                        "Cycle contract execute block supports only instruction statements",
+                    ));
+                }
                 analyze_stmt(s, symbols, refs, data, signatures)?;
             }
         }
