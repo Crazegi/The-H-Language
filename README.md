@@ -764,3 +764,17 @@ Why this exists:
 ```powershell
 cargo test
 ```
+
+### Regenerate Massive Changelog
+
+One-command workflow:
+
+```powershell
+cargo changelog
+```
+
+This regenerates [CHANGELOG.md](CHANGELOG.md) from local git history and includes:
+- merge commits (PR-like history)
+- origin/main reflog push/sync events
+- local HEAD reflog pull/sync events
+- full commit timeline

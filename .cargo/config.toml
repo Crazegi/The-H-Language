@@ -1,0 +1,2 @@
+[alias]
+changelog = "run --bin changelog --"
