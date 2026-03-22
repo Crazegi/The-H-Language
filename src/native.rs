@@ -28,40 +28,98 @@ impl std::fmt::Display for NativeCompileError {
 
 impl std::error::Error for NativeCompileError {}
 
+#[derive(Debug, Clone)]
+pub struct NativeBuildArtifacts {
+    pub rust_runtime_path: PathBuf,
+    pub object_path: PathBuf,
+    pub link_stub_path: PathBuf,
+    pub executable_path: PathBuf,
+}
+
 pub fn compile_h_to_native_binary(source: &str, output_path: &Path) -> Result<PathBuf, NativeCompileError> {
+    let artifacts = compile_h_to_native_artifacts(source, output_path)?;
+    Ok(artifacts.executable_path)
+}
+
+pub fn compile_h_to_native_artifacts(
+    source: &str,
+    output_path: &Path,
+) -> Result<NativeBuildArtifacts, NativeCompileError> {
     let program = parse_source(source).map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
     analyze(&program).map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
     let bytecode = compile_program(&program)
         .map_err(|e| NativeCompileError::new(format!("Compile error: {}", e)))?;
 
-    let rust_source = generate_rust_runner(&bytecode);
-    let rust_file = output_path.with_extension("rs");
-    std::fs::write(&rust_file, rust_source)
+    let rust_runtime_source = generate_rust_runtime_module(&bytecode);
+    let rust_runtime_file = output_path.with_extension("runtime.rs");
+    std::fs::write(&rust_runtime_file, rust_runtime_source)
         .map_err(|e| NativeCompileError::new(format!("Failed to write generated source: {}", e)))?;
 
+    let object_path = output_path.with_extension(object_extension());
+
     let rustc = find_rustc()?;
-    let mut cmd = Command::new(rustc);
-    cmd.arg(&rust_file)
+    let obj_output = Command::new(&rustc)
+        .arg(&rust_runtime_file)
         .arg("--crate-name")
-        .arg("hl_compiled_program")
+        .arg("hl_compiled_obj")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg("--emit=obj")
         .arg("-O")
         .arg("-o")
-        .arg(output_path);
-
-    let output = cmd
+        .arg(&object_path)
         .output()
-        .map_err(|e| NativeCompileError::new(format!("Failed to run rustc: {}", e)))?;
+        .map_err(|e| NativeCompileError::new(format!("Failed to run rustc for object build: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    if !obj_output.status.success() {
+        let stderr = String::from_utf8_lossy(&obj_output.stderr);
+        let stdout = String::from_utf8_lossy(&obj_output.stdout);
         return Err(NativeCompileError::new(format!(
-            "rustc failed\nstdout:\n{}\nstderr:\n{}",
+            "rustc object stage failed\nstdout:\n{}\nstderr:\n{}",
             stdout, stderr
         )));
     }
 
-    Ok(output_path.to_path_buf())
+    let link_stub_source = generate_link_stub_source();
+    let link_stub_file = output_path.with_extension("link.rs");
+    std::fs::write(&link_stub_file, link_stub_source)
+        .map_err(|e| NativeCompileError::new(format!("Failed to write linker stub: {}", e)))?;
+
+    let link_output = Command::new(&rustc)
+        .arg(&link_stub_file)
+        .arg("--crate-name")
+        .arg("hl_compiled_link")
+        .arg("-C")
+        .arg(format!("link-arg={}", object_path.display()))
+        .arg("-O")
+        .arg("-o")
+        .arg(output_path)
+        .output()
+        .map_err(|e| NativeCompileError::new(format!("Failed to run rustc linker stage: {}", e)))?;
+
+    if !link_output.status.success() {
+        let stderr = String::from_utf8_lossy(&link_output.stderr);
+        let stdout = String::from_utf8_lossy(&link_output.stdout);
+        return Err(NativeCompileError::new(format!(
+            "rustc link stage failed\nstdout:\n{}\nstderr:\n{}",
+            stdout, stderr
+        )));
+    }
+
+    Ok(NativeBuildArtifacts {
+        rust_runtime_path: rust_runtime_file,
+        object_path,
+        link_stub_path: link_stub_file,
+        executable_path: output_path.to_path_buf(),
+    })
+}
+
+fn object_extension() -> &'static str {
+    if cfg!(windows) {
+        "obj"
+    } else {
+        "o"
+    }
 }
 
 fn find_rustc() -> Result<PathBuf, NativeCompileError> {
@@ -82,7 +140,7 @@ fn find_rustc() -> Result<PathBuf, NativeCompileError> {
     Ok(PathBuf::from("rustc"))
 }
 
-fn generate_rust_runner(program: &BytecodeProgram) -> String {
+fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     let mut out = String::new();
     out.push_str("use std::cmp::Ordering;\n");
     out.push_str("use std::collections::HashMap;\n\n");
@@ -227,15 +285,26 @@ fn generate_rust_runner(program: &BytecodeProgram) -> String {
     }
     out.push_str("  (globals, funcs)\n}");
 
-    out.push_str("\nfn main() {\n");
+    out.push_str("\n#[no_mangle]\n");
+    out.push_str("pub extern \"C\" fn h_entry() -> i32 {\n");
     out.push_str("  let (globals, funcs) = build_program();\n");
     out.push_str("  let entry = if funcs.contains_key(\"main\") { \"main\" } else { funcs.keys().next().expect(\"no functions\") };\n");
     out.push_str("  match call(entry, &funcs, &globals, Vec::new()) {\n");
-    out.push_str("    Ok(v) => { println!(\"program_return: {}\", render(&v)); },\n");
-    out.push_str("    Err(e) => { eprintln!(\"runtime_error: {}\", e); std::process::exit(1); },\n");
+    out.push_str("    Ok(v) => { println!(\"program_return: {}\", render(&v)); 0 },\n");
+    out.push_str("    Err(e) => { eprintln!(\"runtime_error: {}\", e); 1 },\n");
     out.push_str("  }\n");
     out.push_str("}\n");
 
+    out
+}
+
+fn generate_link_stub_source() -> String {
+    let mut out = String::new();
+    out.push_str("unsafe extern \"C\" { fn h_entry() -> i32; }\n\n");
+    out.push_str("fn main() {\n");
+    out.push_str("  let code = unsafe { h_entry() };\n");
+    out.push_str("  if code != 0 { std::process::exit(code); }\n");
+    out.push_str("}\n");
     out
 }
 

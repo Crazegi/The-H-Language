@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hl_lexer::compile_h_to_native_binary;
+use hl_lexer::compile_h_to_native_artifacts;
 
 const PROGRAM: &str = r#"section .data:
   name: "Engine"
@@ -34,10 +34,15 @@ fn compiles_h_program_to_native_binary_and_runs() {
         out.set_extension("exe");
     }
 
-    let binary = compile_h_to_native_binary(PROGRAM, &out).expect("native compile should succeed");
-    assert!(binary.exists(), "native binary should be created");
+    let artifacts =
+        compile_h_to_native_artifacts(PROGRAM, &out).expect("native compile should succeed");
+    assert!(artifacts.object_path.exists(), "object file should be created");
+    assert!(
+        artifacts.executable_path.exists(),
+        "native executable should be created"
+    );
 
-    let output = Command::new(&binary)
+    let output = Command::new(&artifacts.executable_path)
         .output()
         .expect("compiled binary should execute");
 
@@ -50,7 +55,8 @@ fn compiles_h_program_to_native_binary_and_runs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("program_return: 42"));
 
-    let _ = fs::remove_file(&binary);
-    let generated_rs = binary.with_extension("rs");
-    let _ = fs::remove_file(generated_rs);
+    let _ = fs::remove_file(&artifacts.object_path);
+    let _ = fs::remove_file(&artifacts.executable_path);
+    let _ = fs::remove_file(&artifacts.rust_runtime_path);
+    let _ = fs::remove_file(&artifacts.link_stub_path);
 }

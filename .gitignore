@@ -1,3 +1,7 @@
 target/
 out.hbc.txt
 *.pdb
+*.runtime.rs
+*.link.rs
+*.obj
+advanced.exe

@@ -55,11 +55,15 @@ Compile to bytecode listing:
 cargo run --bin hl-lex -- --compile examples/advanced.hl --out out.hbc.txt
 ```
 
-Compile H source into a native executable binary:
+Compile H source with object + link pipeline (`.obj` then `.exe`):
 
 ```powershell
 cargo run --bin hl-lex -- --native examples/advanced.hl --out advanced.exe
 ```
+
+This mode now emits:
+- Object file: `advanced.obj`
+- Final executable: `advanced.exe`
 
 Run compiled bytecode in VM:
 

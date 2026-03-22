@@ -3,8 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use hl_lexer::{
-    analyze, compile_h_to_native_binary, compile_program, disassemble, parse_source, run_bytecode,
-    run_program, Lexer, TokenKind,
+    analyze, compile_h_to_native_artifacts, compile_program, disassemble, parse_source,
+    run_bytecode, run_program, Lexer, TokenKind,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -232,8 +232,11 @@ fn main() {
                 }
             };
 
-            match compile_h_to_native_binary(&input, &bin_path) {
-                Ok(path) => println!("native_binary: {}", path.display()),
+            match compile_h_to_native_artifacts(&input, &bin_path) {
+                Ok(artifacts) => {
+                    println!("native_object: {}", artifacts.object_path.display());
+                    println!("native_binary: {}", artifacts.executable_path.display());
+                }
                 Err(err) => {
                     eprintln!("Native compile error: {}", err);
                     std::process::exit(1);
