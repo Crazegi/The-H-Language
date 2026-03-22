@@ -257,31 +257,35 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) -> Result<(), Package
         Instruction::And => write_u8(out, 22),
         Instruction::Or => write_u8(out, 23),
         Instruction::Xor => write_u8(out, 24),
-        Instruction::Neg => write_u8(out, 25),
-        Instruction::Not => write_u8(out, 26),
-        Instruction::Cmp3 => write_u8(out, 27),
+        Instruction::BitAnd => write_u8(out, 25),
+        Instruction::BitOr => write_u8(out, 26),
+        Instruction::Shl => write_u8(out, 27),
+        Instruction::Shr => write_u8(out, 28),
+        Instruction::Neg => write_u8(out, 29),
+        Instruction::Not => write_u8(out, 30),
+        Instruction::Cmp3 => write_u8(out, 31),
         Instruction::Jump(v) => {
-            write_u8(out, 28);
+            write_u8(out, 32);
             write_usize(out, *v);
         }
         Instruction::JumpIfFalse(v) => {
-            write_u8(out, 29);
+            write_u8(out, 33);
             write_usize(out, *v);
         }
         Instruction::Call(name, argc) => {
-            write_u8(out, 30);
+            write_u8(out, 34);
             write_string(out, name);
             write_usize(out, *argc);
         }
-        Instruction::PrintBegin => write_u8(out, 31),
+        Instruction::PrintBegin => write_u8(out, 35),
         Instruction::PrintField(v) => {
-            write_u8(out, 32);
+            write_u8(out, 36);
             write_string(out, v);
         }
-        Instruction::PrintEnd => write_u8(out, 33),
-        Instruction::Nop => write_u8(out, 34),
-        Instruction::Pop => write_u8(out, 35),
-        Instruction::Return => write_u8(out, 36),
+        Instruction::PrintEnd => write_u8(out, 37),
+        Instruction::Nop => write_u8(out, 38),
+        Instruction::Pop => write_u8(out, 39),
+        Instruction::Return => write_u8(out, 40),
     }
     Ok(())
 }
@@ -316,22 +320,26 @@ fn read_instruction(cur: &mut Cursor<&[u8]>) -> Result<Instruction, PackageError
         22 => Instruction::And,
         23 => Instruction::Or,
         24 => Instruction::Xor,
-        25 => Instruction::Neg,
-        26 => Instruction::Not,
-        27 => Instruction::Cmp3,
-        28 => Instruction::Jump(read_usize(cur)?),
-        29 => Instruction::JumpIfFalse(read_usize(cur)?),
-        30 => {
+        25 => Instruction::BitAnd,
+        26 => Instruction::BitOr,
+        27 => Instruction::Shl,
+        28 => Instruction::Shr,
+        29 => Instruction::Neg,
+        30 => Instruction::Not,
+        31 => Instruction::Cmp3,
+        32 => Instruction::Jump(read_usize(cur)?),
+        33 => Instruction::JumpIfFalse(read_usize(cur)?),
+        34 => {
             let name = read_string(cur)?;
             let argc = read_usize(cur)?;
             Instruction::Call(name, argc)
         }
-        31 => Instruction::PrintBegin,
-        32 => Instruction::PrintField(read_string(cur)?),
-        33 => Instruction::PrintEnd,
-        34 => Instruction::Nop,
-        35 => Instruction::Pop,
-        36 => Instruction::Return,
+        35 => Instruction::PrintBegin,
+        36 => Instruction::PrintField(read_string(cur)?),
+        37 => Instruction::PrintEnd,
+        38 => Instruction::Nop,
+        39 => Instruction::Pop,
+        40 => Instruction::Return,
         _ => return Err(PackageError::new("Unknown instruction tag in package")),
     })
 }

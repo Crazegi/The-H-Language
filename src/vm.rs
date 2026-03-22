@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::bytecode::{BytecodeProgram, Instruction};
+use crate::builtin;
 use crate::evaluator::Value;
 
 #[derive(Debug, Clone)]
@@ -173,6 +174,36 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
                 let out = logic_xor(to_logic(&l)?, to_logic(&r)?);
                 frame.stack.push(from_logic(out));
             }
+            Instruction::BitAnd => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l & r));
+            }
+            Instruction::BitOr => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l | r));
+            }
+            Instruction::Shl => {
+                let shift = as_int(pop(&mut frame.stack)?)?;
+                if !(0..=63).contains(&shift) {
+                    return Err(VmError::new(
+                        "Shift amount must be in range 0..63 for 64-bit integer semantics",
+                    ));
+                }
+                let value = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(value << (shift as u32)));
+            }
+            Instruction::Shr => {
+                let shift = as_int(pop(&mut frame.stack)?)?;
+                if !(0..=63).contains(&shift) {
+                    return Err(VmError::new(
+                        "Shift amount must be in range 0..63 for 64-bit integer semantics",
+                    ));
+                }
+                let value = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(value >> (shift as u32)));
+            }
             Instruction::Neg => {
                 let v = as_int(pop(&mut frame.stack)?)?;
                 frame.stack.push(Value::Int(-v));
@@ -242,61 +273,7 @@ fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Res
 }
 
 fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, VmError> {
-    fn int_arg(args: &[Value], idx: usize) -> Result<i64, VmError> {
-        match args.get(idx) {
-            Some(Value::Int(v)) => Ok(*v),
-            _ => Err(VmError::new("Expected integer argument")),
-        }
-    }
-
-    fn str_arg<'a>(args: &'a [Value], idx: usize) -> Result<&'a str, VmError> {
-        match args.get(idx) {
-            Some(Value::Str(v)) => Ok(v.as_str()),
-            _ => Err(VmError::new("Expected string argument")),
-        }
-    }
-
-    let out = match name {
-        "abs" => Value::Int(int_arg(args, 0)?.abs()),
-        "sqrt" => {
-            let n = int_arg(args, 0)?;
-            if n < 0 {
-                return Err(VmError::new("sqrt expects non-negative integer"));
-            }
-            Value::Int((n as f64).sqrt().floor() as i64)
-        }
-        "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
-        "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
-        "pow" => {
-            let base = int_arg(args, 0)?;
-            let exp = int_arg(args, 1)?;
-            if exp < 0 {
-                return Err(VmError::new("pow exponent must be non-negative"));
-            }
-            Value::Int(base.pow(exp as u32))
-        }
-        "clamp" => {
-            let v = int_arg(args, 0)?;
-            let lo = int_arg(args, 1)?;
-            let hi = int_arg(args, 2)?;
-            Value::Int(v.clamp(lo, hi))
-        }
-        "len" => Value::Int(str_arg(args, 0)?.chars().count() as i64),
-        "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
-        "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
-        "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
-        "phase" => {
-            let a = to_logic(args.get(0).ok_or_else(|| VmError::new("Missing argument"))?)?;
-            let b = to_logic(args.get(1).ok_or_else(|| VmError::new("Missing argument"))?)?;
-            from_logic(logic_phase(a, b))
-        }
-        "collapse" => {
-            let v = args.get(0).ok_or_else(|| VmError::new("Missing argument"))?;
-            Value::Bool(matches!(to_logic(v)?, Logic3::True))
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(out))
+    builtin::call_builtin(name, args).map_err(VmError::new)
 }
 
 fn pop(stack: &mut Vec<Value>) -> Result<Value, VmError> {
@@ -400,14 +377,6 @@ fn logic_xor(a: Logic3, b: Logic3) -> Logic3 {
         (Logic3::Maybe, _) | (_, Logic3::Maybe) => Logic3::Maybe,
         (Logic3::True, Logic3::True) | (Logic3::False, Logic3::False) => Logic3::False,
         _ => Logic3::True,
-    }
-}
-
-fn logic_phase(a: Logic3, b: Logic3) -> Logic3 {
-    if a == b {
-        a
-    } else {
-        Logic3::Maybe
     }
 }
 

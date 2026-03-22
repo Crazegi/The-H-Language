@@ -283,3 +283,20 @@ fn semantic_rejects_interrupt_function_parameters() {
     let err = analyze(&program).expect_err("interrupt functions with params should fail");
     assert!(err.message.contains("cannot declare parameters"));
 }
+
+#[test]
+fn parses_and_runs_bitwise_and_sleep_until_builtin() {
+    let src = r#"section .text:
+  fn main():
+    own woke = sleep_until("emergency_interrupt")
+    own reg = ((1 << 5) | 3) & 0x1F
+    if woke:
+      return reg >> 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}

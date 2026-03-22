@@ -125,3 +125,17 @@ fn lexes_interrupt_and_yield_keywords() {
     assert!(kinds.contains(&TokenKind::KeywordYield));
     assert!(kinds.contains(&TokenKind::KeywordTo));
 }
+
+#[test]
+fn lexes_bitwise_operators_and_shifts() {
+    let src = "section .text:\n  fn main():\n    own r1 = (1 << 5) | 3\n    own r2 = r1 & 0x1F\n    own r3 = r2 >> 1\n    return r3\n";
+
+    let mut lexer = Lexer::new(src);
+    let tokens = lexer.tokenize().expect("tokenization should succeed");
+    let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+
+    assert!(kinds.contains(&TokenKind::Pipe));
+    assert!(kinds.contains(&TokenKind::Ampersand));
+    assert!(kinds.contains(&TokenKind::ShiftLeft));
+    assert!(kinds.contains(&TokenKind::ShiftRight));
+}

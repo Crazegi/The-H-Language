@@ -1180,6 +1180,10 @@ impl FunctionCompiler {
                     BinaryOp::And => Instruction::And,
                     BinaryOp::Or => Instruction::Or,
                     BinaryOp::Xor => Instruction::Xor,
+                    BinaryOp::BitAnd => Instruction::BitAnd,
+                    BinaryOp::BitOr => Instruction::BitOr,
+                    BinaryOp::Shl => Instruction::Shl,
+                    BinaryOp::Shr => Instruction::Shr,
                 });
             }
             Expr::Call { name, args } => {
@@ -1758,6 +1762,24 @@ fn fold_binary(
         (FoldValue::Bool(a), And, FoldValue::Bool(b)) => Ok(Some(FoldValue::Bool(a && b))),
         (FoldValue::Bool(a), Or, FoldValue::Bool(b)) => Ok(Some(FoldValue::Bool(a || b))),
         (FoldValue::Bool(a), Xor, FoldValue::Bool(b)) => Ok(Some(FoldValue::Bool(a ^ b))),
+        (FoldValue::Int(a), BitAnd, FoldValue::Int(b)) => Ok(Some(FoldValue::Int(a & b))),
+        (FoldValue::Int(a), BitOr, FoldValue::Int(b)) => Ok(Some(FoldValue::Int(a | b))),
+        (FoldValue::Int(a), Shl, FoldValue::Int(b)) => {
+            if !(0..=63).contains(&b) {
+                return Err(CompileError::new(
+                    "Constant shift amount must be in range 0..63",
+                ));
+            }
+            Ok(Some(FoldValue::Int(a << (b as u32))))
+        }
+        (FoldValue::Int(a), Shr, FoldValue::Int(b)) => {
+            if !(0..=63).contains(&b) {
+                return Err(CompileError::new(
+                    "Constant shift amount must be in range 0..63",
+                ));
+            }
+            Ok(Some(FoldValue::Int(a >> (b as u32))))
+        }
         (FoldValue::Maybe, And, FoldValue::Bool(false))
         | (FoldValue::Bool(false), And, FoldValue::Maybe) => Ok(Some(FoldValue::Bool(false))),
         (FoldValue::Maybe, Or, FoldValue::Bool(true))

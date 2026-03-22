@@ -151,6 +151,11 @@ impl Lexer {
                     self.advance();
                     tok
                 }
+                '|' => {
+                    let tok = Token::new(TokenKind::Pipe, "|", self.line, self.column);
+                    self.advance();
+                    tok
+                }
                 '<' => self.scan_lt_like(),
                 '>' => self.scan_gt_like(),
                 '&' => {
@@ -498,7 +503,10 @@ impl Lexer {
         let line = self.line;
         let col = self.column;
         self.advance();
-        if self.current() == Some('=') {
+        if self.current() == Some('<') {
+            self.advance();
+            Token::new(TokenKind::ShiftLeft, "<<", line, col)
+        } else if self.current() == Some('=') {
             self.advance();
             Token::new(TokenKind::Lte, "<=", line, col)
         } else {
@@ -510,7 +518,10 @@ impl Lexer {
         let line = self.line;
         let col = self.column;
         self.advance();
-        if self.current() == Some('=') {
+        if self.current() == Some('>') {
+            self.advance();
+            Token::new(TokenKind::ShiftRight, ">>", line, col)
+        } else if self.current() == Some('=') {
             self.advance();
             Token::new(TokenKind::Gte, ">=", line, col)
         } else {

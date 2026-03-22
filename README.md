@@ -45,12 +45,13 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Typed declarations in block syntax: `int`, `string`, `bool`
 - Assembly instructions: `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
 - Memory-mapped destination style: `mov [port_a], r1`
-- Expressions: arithmetic, comparison, call expressions
+- Expressions: arithmetic, comparison, bitwise (`&`, `|`, `<<`, `>>`), call expressions
 - Tri-state logic: `true`, `false`, `maybe`, `and`, `or`, `xor`, `not`
 - Builtins:
   - math: `abs`, `sqrt`, `pow`, `min`, `max`, `clamp`
   - string: `len`, `upper`, `lower`, `contains`
   - logic: `phase`, `collapse`
+  - hardware: `sleep_until(interrupt)`
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
 

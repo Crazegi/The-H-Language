@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinaryOp, Expr, Program, Stmt};
+use crate::builtin::builtin_arity;
 
 #[derive(Debug, Clone)]
 pub struct SemanticError {
@@ -437,24 +438,6 @@ fn analyze_expr(
             }
             Ok(())
         }
-    }
-}
-
-fn builtin_arity(name: &str) -> Option<usize> {
-    match name {
-        "abs" => Some(1),
-        "sqrt" => Some(1),
-        "min" => Some(2),
-        "max" => Some(2),
-        "pow" => Some(2),
-        "clamp" => Some(3),
-        "len" => Some(1),
-        "upper" => Some(1),
-        "lower" => Some(1),
-        "contains" => Some(2),
-        "phase" => Some(2),
-        "collapse" => Some(1),
-        _ => None,
     }
 }
 

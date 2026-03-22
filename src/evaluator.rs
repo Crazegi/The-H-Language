@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::{BinaryOp, Expr, Instruction, Program, Stmt, UnaryOp};
+use crate::builtin;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -352,61 +353,7 @@ impl Runtime {
 }
 
 fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, RuntimeError> {
-    fn int_arg(args: &[Value], idx: usize) -> Result<i64, RuntimeError> {
-        args.get(idx)
-            .ok_or_else(|| RuntimeError::new("Missing argument"))?
-            .as_int()
-    }
-
-    fn str_arg(args: &[Value], idx: usize) -> Result<&str, RuntimeError> {
-        match args.get(idx) {
-            Some(Value::Str(v)) => Ok(v.as_str()),
-            _ => Err(RuntimeError::new("Expected string argument")),
-        }
-    }
-
-    let out = match name {
-        "abs" => Value::Int(int_arg(args, 0)?.abs()),
-        "sqrt" => {
-            let n = int_arg(args, 0)?;
-            if n < 0 {
-                return Err(RuntimeError::new("sqrt expects non-negative integer"));
-            }
-            Value::Int((n as f64).sqrt().floor() as i64)
-        }
-        "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
-        "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
-        "pow" => {
-            let base = int_arg(args, 0)?;
-            let exp = int_arg(args, 1)?;
-            if exp < 0 {
-                return Err(RuntimeError::new("pow exponent must be non-negative"));
-            }
-            Value::Int(base.pow(exp as u32))
-        }
-        "clamp" => {
-            let v = int_arg(args, 0)?;
-            let lo = int_arg(args, 1)?;
-            let hi = int_arg(args, 2)?;
-            Value::Int(v.clamp(lo, hi))
-        }
-        "len" => Value::Int(str_arg(args, 0)?.chars().count() as i64),
-        "upper" => Value::Str(str_arg(args, 0)?.to_uppercase()),
-        "lower" => Value::Str(str_arg(args, 0)?.to_lowercase()),
-        "contains" => Value::Bool(str_arg(args, 0)?.contains(str_arg(args, 1)?)),
-        "phase" => {
-            let a = to_logic(args.get(0).ok_or_else(|| RuntimeError::new("Missing argument"))?)?;
-            let b = to_logic(args.get(1).ok_or_else(|| RuntimeError::new("Missing argument"))?)?;
-            from_logic(logic_phase(a, b))
-        }
-        "collapse" => {
-            let v = args.get(0).ok_or_else(|| RuntimeError::new("Missing argument"))?;
-            Value::Bool(matches!(to_logic(v)?, Logic3::True))
-        }
-        _ => return Ok(None),
-    };
-
-    Ok(Some(out))
+    builtin::call_builtin(name, args).map_err(RuntimeError::new)
 }
 
 enum Flow {
@@ -474,6 +421,26 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> Result<Value, Runtime
             let b = to_logic(&right)?;
             Ok(from_logic(logic_xor(a, b)))
         }
+        BinaryOp::BitAnd => Ok(Value::Int(left.as_int()? & right.as_int()?)),
+        BinaryOp::BitOr => Ok(Value::Int(left.as_int()? | right.as_int()?)),
+        BinaryOp::Shl => {
+            let shift = right.as_int()?;
+            if !(0..=63).contains(&shift) {
+                return Err(RuntimeError::new(
+                    "Shift amount must be in range 0..63 for 64-bit integer semantics",
+                ));
+            }
+            Ok(Value::Int(left.as_int()? << (shift as u32)))
+        }
+        BinaryOp::Shr => {
+            let shift = right.as_int()?;
+            if !(0..=63).contains(&shift) {
+                return Err(RuntimeError::new(
+                    "Shift amount must be in range 0..63 for 64-bit integer semantics",
+                ));
+            }
+            Ok(Value::Int(left.as_int()? >> (shift as u32)))
+        }
     }
 }
 
@@ -535,23 +502,6 @@ fn logic_xor(a: Logic3, b: Logic3) -> Logic3 {
     }
 }
 
-fn logic_phase(a: Logic3, b: Logic3) -> Logic3 {
-    if a == b {
-        a
-    } else {
-        Logic3::Maybe
-    }
-}
-
-fn compare_values(left: &Value, right: &Value) -> Result<Ordering, RuntimeError> {
-    match (left, right) {
-        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
-        (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
-        (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
-        _ => Err(RuntimeError::new("Cannot compare values of different types")),
-    }
-}
-
 fn equals(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Int(a), Value::Int(b)) => a == b,
@@ -560,6 +510,15 @@ fn equals(left: &Value, right: &Value) -> bool {
         (Value::Maybe, Value::Maybe) => true,
         (Value::Unit, Value::Unit) => true,
         _ => false,
+    }
+}
+
+fn compare_values(left: &Value, right: &Value) -> Result<Ordering, RuntimeError> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
+        (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
+        _ => Err(RuntimeError::new("Cannot compare values of different or unsupported types")),
     }
 }
 

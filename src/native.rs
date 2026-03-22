@@ -170,7 +170,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("  PushInt(i64), PushStr(String), PushBool(bool), PushMaybe, PushUnit,\n");
     out.push_str("  LoadVar(String), DefineVar(String), StoreVar(String), StoreOrDefine(String),\n");
     out.push_str("  DeclareRef { name: String, target: String },\n");
-    out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, And, Or, Xor, Neg, Not, Cmp3,\n");
+    out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, And, Or, Xor, BitAnd, BitOr, Shl, Shr, Neg, Not, Cmp3,\n");
     out.push_str("  Jump(usize), JumpIfFalse(usize),\n");
     out.push_str("  Call(String, usize),\n");
     out.push_str("  PrintBegin, PrintField(String), PrintEnd, Nop, Pop, Return,\n");
@@ -236,6 +236,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"contains\" => Value::Bool(builtin_str_arg(args, 0)?.contains(builtin_str_arg(args, 1)?)),\n");
     out.push_str("    \"phase\" => { let a = to_logic(args.get(0).ok_or_else(|| \"missing argument\".to_string())?)?; let b = to_logic(args.get(1).ok_or_else(|| \"missing argument\".to_string())?)?; from_logic(logic_phase(a, b)) },\n");
     out.push_str("    \"collapse\" => { let v = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; Value::Bool(matches!(to_logic(v)?, Logic3::True)) },\n");
+    out.push_str("    \"sleep_until\" => { if args.get(0).is_none() { return Err(\"missing argument\".to_string()); } Value::Bool(true) },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");
@@ -307,6 +308,10 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("      Instruction::And => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_and(to_logic(&l)?, to_logic(&r)?))); },\n");
     out.push_str("      Instruction::Or => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_or(to_logic(&l)?, to_logic(&r)?))); },\n");
     out.push_str("      Instruction::Xor => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(from_logic(logic_xor(to_logic(&l)?, to_logic(&r)?))); },\n");
+    out.push_str("      Instruction::BitAnd => { let r = as_int(pop(&mut stack)?)?; let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l & r)); },\n");
+    out.push_str("      Instruction::BitOr => { let r = as_int(pop(&mut stack)?)?; let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l | r)); },\n");
+    out.push_str("      Instruction::Shl => { let s = as_int(pop(&mut stack)?)?; if !(0..=63).contains(&s) { return Err(\"shift amount out of range\".to_string()); } let v = as_int(pop(&mut stack)?)?; stack.push(Value::Int(v << (s as u32))); },\n");
+    out.push_str("      Instruction::Shr => { let s = as_int(pop(&mut stack)?)?; if !(0..=63).contains(&s) { return Err(\"shift amount out of range\".to_string()); } let v = as_int(pop(&mut stack)?)?; stack.push(Value::Int(v >> (s as u32))); },\n");
     out.push_str("      Instruction::Neg => { let v = as_int(pop(&mut stack)?)?; stack.push(Value::Int(-v)); },\n");
     out.push_str("      Instruction::Not => { let v = pop(&mut stack)?; let out = match to_logic(&v)? { Logic3::True => Logic3::False, Logic3::False => Logic3::True, Logic3::Maybe => Logic3::Maybe }; stack.push(from_logic(out)); },\n");
     out.push_str("      Instruction::Cmp3 => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; let o = cmp_values(&l, &r)?; let mapped = match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 }; stack.push(Value::Int(mapped)); },\n");
@@ -423,6 +428,10 @@ fn instruction_to_rust(ins: &Instruction) -> String {
         Instruction::And => "Instruction::And".to_string(),
         Instruction::Or => "Instruction::Or".to_string(),
         Instruction::Xor => "Instruction::Xor".to_string(),
+        Instruction::BitAnd => "Instruction::BitAnd".to_string(),
+        Instruction::BitOr => "Instruction::BitOr".to_string(),
+        Instruction::Shl => "Instruction::Shl".to_string(),
+        Instruction::Shr => "Instruction::Shr".to_string(),
         Instruction::Neg => "Instruction::Neg".to_string(),
         Instruction::Not => "Instruction::Not".to_string(),
         Instruction::Cmp3 => "Instruction::Cmp3".to_string(),

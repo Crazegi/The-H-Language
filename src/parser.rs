@@ -392,12 +392,38 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_equality()?;
+        let mut expr = self.parse_bit_or()?;
         while self.match_kind(TokenKind::KeywordAnd) {
-            let right = self.parse_equality()?;
+            let right = self.parse_bit_or()?;
             expr = Expr::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::And,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_bit_or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_bit_and()?;
+        while self.match_kind(TokenKind::Pipe) {
+            let right = self.parse_bit_and()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::BitOr,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_bit_and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_equality()?;
+        while self.match_kind(TokenKind::Ampersand) {
+            let right = self.parse_equality()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::BitAnd,
                 right: Box::new(right),
             };
         }
@@ -428,7 +454,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_term()?;
+        let mut expr = self.parse_shift()?;
         loop {
             let op = if self.match_kind(TokenKind::Lt) {
                 Some(BinaryOp::Lt)
@@ -444,6 +470,31 @@ impl Parser {
             let Some(op) = op else {
                 break;
             };
+            let right = self.parse_shift()?;
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_shift(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_term()?;
+        loop {
+            let op = if self.match_kind(TokenKind::ShiftLeft) {
+                Some(BinaryOp::Shl)
+            } else if self.match_kind(TokenKind::ShiftRight) {
+                Some(BinaryOp::Shr)
+            } else {
+                None
+            };
+
+            let Some(op) = op else {
+                break;
+            };
+
             let right = self.parse_term()?;
             expr = Expr::Binary {
                 left: Box::new(expr),

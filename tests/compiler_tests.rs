@@ -88,6 +88,24 @@ section .text:
 }
 
 #[test]
+fn vm_executes_bitwise_and_sleep_until_builtin() {
+    let src = r#"section .text:
+  fn main():
+    own woke = sleep_until("irq_ready")
+    own reg = ((1 << 5) | 3) & 0x1F
+    if woke:
+      return reg >> 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():
