@@ -1,0 +1,292 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::bytecode::{BytecodeProgram, Instruction};
+use crate::compiler::compile_program;
+use crate::evaluator::Value;
+use crate::parser::parse_source;
+use crate::semantic::analyze;
+
+#[derive(Debug, Clone)]
+pub struct NativeCompileError {
+    pub message: String,
+}
+
+impl NativeCompileError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for NativeCompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for NativeCompileError {}
+
+pub fn compile_h_to_native_binary(source: &str, output_path: &Path) -> Result<PathBuf, NativeCompileError> {
+    let program = parse_source(source).map_err(|e| NativeCompileError::new(format!("Parse error: {}", e)))?;
+    analyze(&program).map_err(|e| NativeCompileError::new(format!("Semantic error: {}", e)))?;
+    let bytecode = compile_program(&program)
+        .map_err(|e| NativeCompileError::new(format!("Compile error: {}", e)))?;
+
+    let rust_source = generate_rust_runner(&bytecode);
+    let rust_file = output_path.with_extension("rs");
+    std::fs::write(&rust_file, rust_source)
+        .map_err(|e| NativeCompileError::new(format!("Failed to write generated source: {}", e)))?;
+
+    let rustc = find_rustc()?;
+    let mut cmd = Command::new(rustc);
+    cmd.arg(&rust_file)
+        .arg("--crate-name")
+        .arg("hl_compiled_program")
+        .arg("-O")
+        .arg("-o")
+        .arg(output_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| NativeCompileError::new(format!("Failed to run rustc: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(NativeCompileError::new(format!(
+            "rustc failed\nstdout:\n{}\nstderr:\n{}",
+            stdout, stderr
+        )));
+    }
+
+    Ok(output_path.to_path_buf())
+}
+
+fn find_rustc() -> Result<PathBuf, NativeCompileError> {
+    if let Ok(explicit) = std::env::var("RUSTC") {
+        let pb = PathBuf::from(explicit);
+        if pb.exists() {
+            return Ok(pb);
+        }
+    }
+
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        let candidate = PathBuf::from(home).join(".cargo").join("bin").join("rustc.exe");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Ok(PathBuf::from("rustc"))
+}
+
+fn generate_rust_runner(program: &BytecodeProgram) -> String {
+    let mut out = String::new();
+    out.push_str("use std::cmp::Ordering;\n");
+    out.push_str("use std::collections::HashMap;\n\n");
+
+    out.push_str("#[derive(Clone, Debug)]\n");
+    out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Ref(String), Unit }\n\n");
+
+    out.push_str("#[derive(Clone, Debug)]\n");
+    out.push_str("enum Instruction {\n");
+    out.push_str("  PushInt(i64), PushStr(String), PushBool(bool), PushUnit,\n");
+    out.push_str("  LoadVar(String), DefineVar(String), StoreVar(String), StoreOrDefine(String),\n");
+    out.push_str("  DeclareRef { name: String, target: String },\n");
+    out.push_str("  Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Lte, Gt, Gte, Neg, Cmp3,\n");
+    out.push_str("  Jump(usize), JumpIfFalse(usize),\n");
+    out.push_str("  Call(String, usize),\n");
+    out.push_str("  PrintBegin, PrintField(String), PrintEnd, Pop, Return,\n");
+    out.push_str("}\n\n");
+
+    out.push_str("#[derive(Clone)]\n");
+    out.push_str("struct Function { params: Vec<String>, code: Vec<Instruction> }\n\n");
+
+    out.push_str("fn render(v: &Value) -> String {\n");
+    out.push_str("  match v {\n");
+    out.push_str("    Value::Int(n) => n.to_string(),\n");
+    out.push_str("    Value::Str(s) => format!(\"\\\"{}\\\"\", s),\n");
+    out.push_str("    Value::Bool(b) => b.to_string(),\n");
+    out.push_str("    Value::Ref(name) => format!(\"&{}\", name),\n");
+    out.push_str("    Value::Unit => \"unit\".to_string(),\n");
+    out.push_str("  }\n}\n\n");
+
+    out.push_str("fn pop(stack: &mut Vec<Value>) -> Result<Value, String> { stack.pop().ok_or_else(|| \"stack underflow\".to_string()) }\n\n");
+
+    out.push_str("fn as_int(v: Value) -> Result<i64, String> { match v { Value::Int(n) => Ok(n), _ => Err(\"expected int\".to_string()) } }\n");
+    out.push_str("fn as_bool(v: Value) -> Result<bool, String> { match v { Value::Bool(b) => Ok(b), Value::Int(n) => Ok(n != 0), _ => Err(\"expected bool-compatible value\".to_string()) } }\n\n");
+
+    out.push_str("fn cmp_values(a: &Value, b: &Value) -> Result<Ordering, String> {\n");
+    out.push_str("  match (a, b) {\n");
+    out.push_str("    (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),\n");
+    out.push_str("    (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),\n");
+    out.push_str("    (Value::Bool(x), Value::Bool(y)) => Ok(x.cmp(y)),\n");
+    out.push_str("    _ => Err(\"cannot compare different types\".to_string()),\n");
+    out.push_str("  }\n}\n\n");
+
+    out.push_str("fn eq_values(a: &Value, b: &Value) -> bool {\n");
+    out.push_str("  match (a, b) {\n");
+    out.push_str("    (Value::Int(x), Value::Int(y)) => x == y,\n");
+    out.push_str("    (Value::Str(x), Value::Str(y)) => x == y,\n");
+    out.push_str("    (Value::Bool(x), Value::Bool(y)) => x == y,\n");
+    out.push_str("    (Value::Unit, Value::Unit) => true,\n");
+    out.push_str("    _ => false,\n");
+    out.push_str("  }\n}\n\n");
+
+    out.push_str("fn resolve(globals: &HashMap<String, Value>, locals: &HashMap<String, Value>, name: &str) -> Result<Value, String> {\n");
+    out.push_str("  if let Some(v) = locals.get(name) {\n");
+    out.push_str("    return match v { Value::Ref(target) => resolve(globals, locals, target), _ => Ok(v.clone()) };\n");
+    out.push_str("  }\n");
+    out.push_str("  globals.get(name).cloned().ok_or_else(|| format!(\"unknown symbol `{}`\", name))\n");
+    out.push_str("}\n\n");
+
+    out.push_str("fn store(local: &mut HashMap<String, Value>, name: &str, value: Value) -> Result<(), String> {\n");
+    out.push_str("  match local.get(name) {\n");
+    out.push_str("    Some(Value::Ref(target)) => Err(format!(\"cannot assign to ref `{}` -> `{}`\", name, target)),\n");
+    out.push_str("    Some(_) => { local.insert(name.to_string(), value); Ok(()) },\n");
+    out.push_str("    None => Err(format!(\"unknown local `{}`\", name)),\n");
+    out.push_str("  }\n}\n\n");
+
+    out.push_str("fn call(fn_name: &str, funcs: &HashMap<String, Function>, globals: &HashMap<String, Value>, args: Vec<Value>) -> Result<Value, String> {\n");
+    out.push_str("  let f = funcs.get(fn_name).ok_or_else(|| format!(\"unknown function `{}`\", fn_name))?.clone();\n");
+    out.push_str("  if f.params.len() != args.len() { return Err(format!(\"arity mismatch for {}\", fn_name)); }\n");
+    out.push_str("  let mut locals: HashMap<String, Value> = HashMap::new();\n");
+    out.push_str("  for (p, a) in f.params.iter().zip(args.into_iter()) { locals.insert(p.clone(), a); }\n");
+    out.push_str("  let mut stack: Vec<Value> = Vec::new();\n");
+    out.push_str("  let mut ip: usize = 0;\n");
+    out.push_str("  while ip < f.code.len() {\n");
+    out.push_str("    match &f.code[ip] {\n");
+    out.push_str("      Instruction::PushInt(v) => stack.push(Value::Int(*v)),\n");
+    out.push_str("      Instruction::PushStr(v) => stack.push(Value::Str(v.clone())),\n");
+    out.push_str("      Instruction::PushBool(v) => stack.push(Value::Bool(*v)),\n");
+    out.push_str("      Instruction::PushUnit => stack.push(Value::Unit),\n");
+    out.push_str("      Instruction::LoadVar(n) => stack.push(resolve(globals, &locals, n)?),\n");
+    out.push_str("      Instruction::DefineVar(n) => { let v = pop(&mut stack)?; locals.insert(n.clone(), v); },\n");
+    out.push_str("      Instruction::StoreVar(n) => { let v = pop(&mut stack)?; store(&mut locals, n, v)?; },\n");
+    out.push_str("      Instruction::StoreOrDefine(n) => { let v = pop(&mut stack)?; if locals.contains_key(n) { store(&mut locals, n, v)?; } else { locals.insert(n.clone(), v); } },\n");
+    out.push_str("      Instruction::DeclareRef { name, target } => { if !locals.contains_key(target) && !globals.contains_key(target) { return Err(format!(\"unknown symbol `{}`\", target)); } locals.insert(name.clone(), Value::Ref(target.clone())); },\n");
+    out.push_str("      Instruction::Add => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; match (l, r) { (Value::Int(a), Value::Int(b)) => stack.push(Value::Int(a + b)), (Value::Str(a), Value::Str(b)) => stack.push(Value::Str(format!(\"{}{}\", a, b))), _ => return Err(\"invalid add\".to_string()) } },\n");
+    out.push_str("      Instruction::Sub => { let r = as_int(pop(&mut stack)?)?; let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l - r)); },\n");
+    out.push_str("      Instruction::Mul => { let r = as_int(pop(&mut stack)?)?; let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l * r)); },\n");
+    out.push_str("      Instruction::Div => { let r = as_int(pop(&mut stack)?)?; if r == 0 { return Err(\"division by zero\".to_string()); } let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l / r)); },\n");
+    out.push_str("      Instruction::Mod => { let r = as_int(pop(&mut stack)?)?; if r == 0 { return Err(\"modulo by zero\".to_string()); } let l = as_int(pop(&mut stack)?)?; stack.push(Value::Int(l % r)); },\n");
+    out.push_str("      Instruction::Eq => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(eq_values(&l, &r))); },\n");
+    out.push_str("      Instruction::Ne => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(!eq_values(&l, &r))); },\n");
+    out.push_str("      Instruction::Lt => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? == Ordering::Less)); },\n");
+    out.push_str("      Instruction::Lte => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? != Ordering::Greater)); },\n");
+    out.push_str("      Instruction::Gt => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? == Ordering::Greater)); },\n");
+    out.push_str("      Instruction::Gte => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; stack.push(Value::Bool(cmp_values(&l, &r)? != Ordering::Less)); },\n");
+    out.push_str("      Instruction::Neg => { let v = as_int(pop(&mut stack)?)?; stack.push(Value::Int(-v)); },\n");
+    out.push_str("      Instruction::Cmp3 => { let r = pop(&mut stack)?; let l = pop(&mut stack)?; let o = cmp_values(&l, &r)?; let mapped = match o { Ordering::Less => -1, Ordering::Equal => 0, Ordering::Greater => 1 }; stack.push(Value::Int(mapped)); },\n");
+    out.push_str("      Instruction::Jump(t) => { ip = *t; continue; },\n");
+    out.push_str("      Instruction::JumpIfFalse(t) => { let c = as_bool(pop(&mut stack)?)?; if !c { ip = *t; continue; } },\n");
+    out.push_str("      Instruction::Call(name, argc) => { let mut a = Vec::with_capacity(*argc); for _ in 0..*argc { a.push(pop(&mut stack)?); } a.reverse(); let v = call(name, funcs, globals, a)?; stack.push(v); },\n");
+    out.push_str("      Instruction::PrintBegin => println!(\"print:\"),\n");
+    out.push_str("      Instruction::PrintField(k) => { let v = pop(&mut stack)?; println!(\"  {}: {}\", k, render(&v)); },\n");
+    out.push_str("      Instruction::PrintEnd => {},\n");
+    out.push_str("      Instruction::Pop => { let _ = pop(&mut stack)?; },\n");
+    out.push_str("      Instruction::Return => { return Ok(stack.pop().unwrap_or(Value::Unit)); },\n");
+    out.push_str("    }\n");
+    out.push_str("    ip += 1;\n");
+    out.push_str("  }\n");
+    out.push_str("  Ok(Value::Unit)\n}\n\n");
+
+    out.push_str("fn build_program() -> (HashMap<String, Value>, HashMap<String, Function>) {\n");
+    out.push_str("  let mut globals: HashMap<String, Value> = HashMap::new();\n");
+    for (name, value) in &program.globals {
+        out.push_str(&format!("  globals.insert({:?}.to_string(), {});\n", name, value_to_rust(value)));
+    }
+
+    out.push_str("  let mut funcs: HashMap<String, Function> = HashMap::new();\n");
+    let mut names: Vec<&String> = program.functions.keys().collect();
+    names.sort();
+    for name in names {
+        let f = &program.functions[name];
+        out.push_str("  {\n");
+        out.push_str("    let mut code: Vec<Instruction> = Vec::new();\n");
+        for ins in &f.code {
+            out.push_str(&format!("    code.push({});\n", instruction_to_rust(ins)));
+        }
+        out.push_str("    funcs.insert(\n");
+        out.push_str(&format!("      {:?}.to_string(),\n", f.name));
+        out.push_str("      Function {\n");
+        out.push_str("        params: vec![");
+        for (i, p) in f.params.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&format!("{:?}.to_string()", p));
+        }
+        out.push_str("],\n");
+        out.push_str("        code,\n");
+        out.push_str("      },\n");
+        out.push_str("    );\n");
+        out.push_str("  }\n");
+    }
+    out.push_str("  (globals, funcs)\n}");
+
+    out.push_str("\nfn main() {\n");
+    out.push_str("  let (globals, funcs) = build_program();\n");
+    out.push_str("  let entry = if funcs.contains_key(\"main\") { \"main\" } else { funcs.keys().next().expect(\"no functions\") };\n");
+    out.push_str("  match call(entry, &funcs, &globals, Vec::new()) {\n");
+    out.push_str("    Ok(v) => { println!(\"program_return: {}\", render(&v)); },\n");
+    out.push_str("    Err(e) => { eprintln!(\"runtime_error: {}\", e); std::process::exit(1); },\n");
+    out.push_str("  }\n");
+    out.push_str("}\n");
+
+    out
+}
+
+fn value_to_rust(value: &Value) -> String {
+    match value {
+        Value::Int(v) => format!("Value::Int({})", v),
+        Value::Str(v) => format!("Value::Str({:?}.to_string())", v),
+        Value::Bool(v) => format!("Value::Bool({})", v),
+        Value::Ref(v) => format!("Value::Ref({:?}.to_string())", v),
+        Value::Unit => "Value::Unit".to_string(),
+    }
+}
+
+fn instruction_to_rust(ins: &Instruction) -> String {
+    match ins {
+        Instruction::PushInt(v) => format!("Instruction::PushInt({})", v),
+        Instruction::PushStr(v) => format!("Instruction::PushStr({:?}.to_string())", v),
+        Instruction::PushBool(v) => format!("Instruction::PushBool({})", v),
+        Instruction::PushUnit => "Instruction::PushUnit".to_string(),
+        Instruction::LoadVar(v) => format!("Instruction::LoadVar({:?}.to_string())", v),
+        Instruction::DefineVar(v) => format!("Instruction::DefineVar({:?}.to_string())", v),
+        Instruction::StoreVar(v) => format!("Instruction::StoreVar({:?}.to_string())", v),
+        Instruction::StoreOrDefine(v) => {
+            format!("Instruction::StoreOrDefine({:?}.to_string())", v)
+        }
+        Instruction::DeclareRef { name, target } => format!(
+            "Instruction::DeclareRef {{ name: {:?}.to_string(), target: {:?}.to_string() }}",
+            name, target
+        ),
+        Instruction::Add => "Instruction::Add".to_string(),
+        Instruction::Sub => "Instruction::Sub".to_string(),
+        Instruction::Mul => "Instruction::Mul".to_string(),
+        Instruction::Div => "Instruction::Div".to_string(),
+        Instruction::Mod => "Instruction::Mod".to_string(),
+        Instruction::Eq => "Instruction::Eq".to_string(),
+        Instruction::Ne => "Instruction::Ne".to_string(),
+        Instruction::Lt => "Instruction::Lt".to_string(),
+        Instruction::Lte => "Instruction::Lte".to_string(),
+        Instruction::Gt => "Instruction::Gt".to_string(),
+        Instruction::Gte => "Instruction::Gte".to_string(),
+        Instruction::Neg => "Instruction::Neg".to_string(),
+        Instruction::Cmp3 => "Instruction::Cmp3".to_string(),
+        Instruction::Jump(v) => format!("Instruction::Jump({})", v),
+        Instruction::JumpIfFalse(v) => format!("Instruction::JumpIfFalse({})", v),
+        Instruction::Call(name, argc) => {
+            format!("Instruction::Call({:?}.to_string(), {})", name, argc)
+        }
+        Instruction::PrintBegin => "Instruction::PrintBegin".to_string(),
+        Instruction::PrintField(v) => format!("Instruction::PrintField({:?}.to_string())", v),
+        Instruction::PrintEnd => "Instruction::PrintEnd".to_string(),
+        Instruction::Pop => "Instruction::Pop".to_string(),
+        Instruction::Return => "Instruction::Return".to_string(),
+    }
+}

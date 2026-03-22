@@ -1,9 +1,10 @@
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 
 use hl_lexer::{
-    analyze, compile_program, disassemble, parse_source, run_bytecode, run_program, Lexer,
-    TokenKind,
+    analyze, compile_h_to_native_binary, compile_program, disassemble, parse_source, run_bytecode,
+    run_program, Lexer, TokenKind,
 };
 
 const SAMPLE: &str = r#"section .data:
@@ -50,6 +51,7 @@ enum Mode {
     Ast,
     Compile,
     Vm,
+    Native,
 }
 
 fn main() {
@@ -65,6 +67,7 @@ fn main() {
             "--ast" => mode = Mode::Ast,
             "--compile" => mode = Mode::Compile,
             "--vm" => mode = Mode::Vm,
+            "--native" => mode = Mode::Native,
             "--out" => {
                 if i + 1 >= args.len() {
                     eprintln!("Expected a file path after --out");
@@ -77,6 +80,8 @@ fn main() {
         }
         i += 1;
     }
+
+    let input_path = path.clone();
 
     let input = match path {
         Some(path) => match fs::read_to_string(&path) {
@@ -202,6 +207,35 @@ fn main() {
                 Ok(value) => println!("program_return: {}", value.render()),
                 Err(err) => {
                     eprintln!("Runtime error: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Mode::Native => {
+            let bin_path = match out_path {
+                Some(path) => PathBuf::from(path),
+                None => {
+                    let mut default_name = match input_path {
+                        Some(p) => {
+                            let stem = std::path::Path::new(&p)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("a.out");
+                            PathBuf::from(stem)
+                        }
+                        None => PathBuf::from("h_program"),
+                    };
+                    if cfg!(windows) {
+                        default_name.set_extension("exe");
+                    }
+                    default_name
+                }
+            };
+
+            match compile_h_to_native_binary(&input, &bin_path) {
+                Ok(path) => println!("native_binary: {}", path.display()),
+                Err(err) => {
+                    eprintln!("Native compile error: {}", err);
                     std::process::exit(1);
                 }
             }

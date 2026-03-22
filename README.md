@@ -55,6 +55,12 @@ Compile to bytecode listing:
 cargo run --bin hl-lex -- --compile examples/advanced.hl --out out.hbc.txt
 ```
 
+Compile H source into a native executable binary:
+
+```powershell
+cargo run --bin hl-lex -- --native examples/advanced.hl --out advanced.exe
+```
+
 Run compiled bytecode in VM:
 
 ```powershell
