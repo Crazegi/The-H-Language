@@ -445,6 +445,186 @@ fn parse_rejects_multifile_import_cycles() {
     assert!(err.message.contains("Import cycle detected"));
 }
 
+  #[test]
+  fn parses_and_runs_directory_imports() {
+    let root = unique_temp_path("multifile_dir_import");
+    let pkg_dir = root.join("pkg");
+    std::fs::create_dir_all(&pkg_dir).expect("should create package dir");
+
+    let main_path = root.join("main.hl");
+    let helper_a = pkg_dir.join("a.hl");
+    let helper_b = pkg_dir.join("b.hl");
+
+    std::fs::write(
+      &helper_a,
+      r#"section .text:
+  fn helper_a():
+    return 2
+"#,
+    )
+    .expect("should write helper a");
+
+    std::fs::write(
+      &helper_b,
+      r#"section .text:
+  fn helper_b():
+    return 5
+"#,
+    )
+    .expect("should write helper b");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./pkg"
+
+  fn main():
+    own sum = helper_a()
+    add sum, helper_b()
+    return sum
+"#,
+    )
+    .expect("should write main module");
+
+    let program = parse_source_from_path(&main_path).expect("directory import should parse");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "7");
+  }
+
+  #[test]
+  fn parses_and_runs_glob_imports() {
+    let root = unique_temp_path("multifile_glob_import");
+    let lib_dir = root.join("lib");
+    std::fs::create_dir_all(&lib_dir).expect("should create lib dir");
+
+    let main_path = root.join("main.hl");
+    let h1 = lib_dir.join("one.hl");
+    let h2 = lib_dir.join("two.hl");
+
+    std::fs::write(
+      &h1,
+      r#"section .text:
+  fn one():
+    return 10
+"#,
+    )
+    .expect("should write one");
+
+    std::fs::write(
+      &h2,
+      r#"section .text:
+  fn two():
+    return 32
+"#,
+    )
+    .expect("should write two");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./lib/*.hl"
+
+  fn main():
+    own total = one()
+    add total, two()
+    return total
+"#,
+    )
+    .expect("should write main");
+
+    let program = parse_source_from_path(&main_path).expect("glob import should parse");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "42");
+  }
+
+  #[test]
+  fn parses_and_runs_recursive_directory_imports() {
+    let root = unique_temp_path("multifile_recursive_dir_import");
+    let pkg_dir = root.join("pkg");
+    let nested_dir = pkg_dir.join("nested");
+    std::fs::create_dir_all(&nested_dir).expect("should create nested package dir");
+
+    let main_path = root.join("main.hl");
+    let root_mod = pkg_dir.join("root.hl");
+    let nested_mod = nested_dir.join("value.hl");
+
+    std::fs::write(
+      &root_mod,
+      r#"section .text:
+  fn root_value():
+    return 6
+"#,
+    )
+    .expect("should write root module");
+
+    std::fs::write(
+      &nested_mod,
+      r#"section .text:
+  fn nested_value():
+    return 36
+"#,
+    )
+    .expect("should write nested module");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./pkg"
+
+  fn main():
+    own total = root_value()
+    add total, nested_value()
+    return total
+"#,
+    )
+    .expect("should write main module");
+
+    let program = parse_source_from_path(&main_path)
+      .expect("recursive directory import should parse");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "42");
+  }
+
+  #[test]
+  fn multifile_imports_deduplicate_overlapping_targets() {
+    let root = unique_temp_path("multifile_overlap_dedupe");
+    let lib_dir = root.join("lib");
+    std::fs::create_dir_all(&lib_dir).expect("should create lib dir");
+
+    let main_path = root.join("main.hl");
+    let helper_path = lib_dir.join("helper.hl");
+
+    std::fs::write(
+      &helper_path,
+      r#"section .text:
+  fn helper_value():
+    return 42
+"#,
+    )
+    .expect("should write helper module");
+
+    std::fs::write(
+      &main_path,
+      r#"section .text:
+  import "./lib"
+  import "./lib/helper.hl"
+
+  fn main():
+    return helper_value()
+"#,
+    )
+    .expect("should write main module");
+
+    let program = parse_source_from_path(&main_path)
+      .expect("overlapping directory/file import should parse");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "42");
+  }
+
 #[test]
 fn semantic_rejects_namespaced_builtin_without_import() {
     let src = r#"section .text:
@@ -456,6 +636,52 @@ fn semantic_rejects_namespaced_builtin_without_import() {
     let program = parse_source(src).expect("parse should pass");
     let err = analyze(&program).expect_err("missing import should fail semantic analysis");
     assert!(err.message.contains("not imported"));
+}
+
+#[test]
+fn semantic_rejects_break_outside_loop() {
+    let src = r#"section .text:
+  fn main():
+    break
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("break outside loop should fail semantic analysis");
+    assert!(err.message.contains("inside loop"));
+}
+
+#[test]
+fn semantic_rejects_continue_outside_loop() {
+    let src = r#"section .text:
+  fn main():
+    continue
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("continue outside loop should fail semantic analysis");
+    assert!(err.message.contains("inside loop"));
+}
+
+#[test]
+fn parses_and_runs_break_continue_in_loops() {
+    let src = r#"section .text:
+  fn main():
+    own i = 0
+    own sum = 0
+    while i < 10:
+      add i, 1
+      if i == 3:
+        continue
+      if i == 8:
+        break
+      add sum, i
+    return sum
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "25");
 }
 
 #[test]

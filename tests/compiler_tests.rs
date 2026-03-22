@@ -398,6 +398,29 @@ fn vm_executes_struct_construction_and_field_access() {
 }
 
 #[test]
+fn vm_executes_break_continue_in_loops() {
+    let src = r#"section .text:
+  fn main():
+    own i = 0
+    own sum = 0
+    while i < 10:
+      add i, 1
+      if i == 3:
+        continue
+      if i == 8:
+        break
+      add sum, i
+    return sum
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "25");
+}
+
+#[test]
 fn vm_executes_core_stdlib_math_collections_string_convert() {
     let src = r#"section .text:
   fn main():

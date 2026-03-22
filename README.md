@@ -154,21 +154,25 @@ clear error.
 
 ### Multi-file .hl Imports
 
-H also supports importing local source files from inside `section .text:`:
+H supports project-style source imports from inside `section .text:`.
+
+Supported forms:
 
 ```text
 section .text:
-  import "./helper.hl"
-
-  fn main():
-    return helper_value()
+  import "./helper.hl"   ; single file
+  import "./pkg"         ; directory (recursive .hl discovery)
+  import "./pkg/*.hl"    ; glob pattern
 ```
 
 Rules:
-- File imports are resolved relative to the importing file.
+- Relative path imports are resolved from the importing file's directory.
+- Directory imports recursively collect `.hl` files in deterministic sorted order.
+- Glob imports support standard wildcard patterns and are resolved deterministically.
 - Recursive imports are supported.
 - Import cycles are rejected with a parse-time error.
-- Duplicate function names across imported files are rejected.
+- Duplicate symbols across modules are rejected (`section .data` keys, functions, structs).
+- Overlapping imports are deduplicated by canonical file path.
 - Stdlib module imports (e.g. `import math`) continue to work the same way.
 
 ### Module Alias Map (Practical Examples)

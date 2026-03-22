@@ -447,6 +447,18 @@ impl Parser {
             });
         }
 
+        if self.match_kind(TokenKind::KeywordBreak) {
+            let span = self.previous().span;
+            self.consume_stmt_terminator();
+            return Ok(Stmt::Break { span });
+        }
+
+        if self.match_kind(TokenKind::KeywordContinue) {
+            let span = self.previous().span;
+            self.consume_stmt_terminator();
+            return Ok(Stmt::Continue { span });
+        }
+
         if self.check(TokenKind::Mnemonic) {
             let op_tok = self.advance().clone();
             let op = match op_tok.lexeme.to_ascii_lowercase().as_str() {
@@ -1126,9 +1138,18 @@ fn parse_source_from_path_inner(
             .copied()
             .unwrap_or(crate::token::Span { line: 1, column: 1 });
         if is_file_import_spec(import) {
-            let child = resolve_import_path(parent, import)?;
-            let child_program = parse_source_from_path_inner(&child, visited, stack)?;
-            merge_programs(&mut merged, child_program)?;
+            let targets = resolve_import_paths(parent, import)?;
+            if targets.is_empty() {
+                return Err(ParseError {
+                    line: span.line,
+                    column: span.column,
+                    message: format!("Import `{}` resolved to no .hl files", import),
+                });
+            }
+            for child in targets {
+                let child_program = parse_source_from_path_inner(&child, visited, stack)?;
+                merge_programs(&mut merged, child_program)?;
+            }
         } else if !merged.imports.iter().any(|m| m == import) {
             merged.imports.push(import.clone());
             merged.import_spans.push(span);
@@ -1201,7 +1222,11 @@ fn merge_programs(target: &mut Program, mut incoming: Program) -> Result<(), Par
 }
 
 fn is_file_import_spec(spec: &str) -> bool {
-    spec.ends_with(".hl") || spec.contains('/') || spec.contains('\\') || spec.starts_with('.')
+    spec.ends_with(".hl")
+        || spec.contains('/')
+        || spec.contains('\\')
+        || spec.starts_with('.')
+        || has_glob_magic(spec)
 }
 
 fn resolve_import_path(base_dir: &Path, spec: &str) -> Result<PathBuf, ParseError> {
@@ -1212,6 +1237,88 @@ fn resolve_import_path(base_dir: &Path, spec: &str) -> Result<PathBuf, ParseErro
         base_dir.join(raw)
     };
     canonicalize_existing(&joined)
+}
+
+fn resolve_import_paths(base_dir: &Path, spec: &str) -> Result<Vec<PathBuf>, ParseError> {
+    if has_glob_magic(spec) {
+        let pattern = if Path::new(spec).is_absolute() {
+            spec.to_string()
+        } else {
+            normalize_glob_pattern(&base_dir.join(spec))
+        };
+
+        let mut matches = Vec::new();
+        let entries = glob::glob(&pattern).map_err(|e| ParseError {
+            line: 1,
+            column: 1,
+            message: format!("Invalid import glob `{}`: {}", spec, e),
+        })?;
+        for entry in entries {
+            let path = entry.map_err(|e| ParseError {
+                line: 1,
+                column: 1,
+                message: format!("Failed to resolve import glob `{}`: {}", spec, e),
+            })?;
+            if path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("hl"))
+            {
+                matches.push(canonicalize_existing(&path)?);
+            }
+        }
+        matches.sort();
+        matches.dedup();
+        return Ok(matches);
+    }
+
+    let resolved = resolve_import_path(base_dir, spec)?;
+    if resolved.is_dir() {
+        let mut files = Vec::new();
+        collect_hl_files_recursive(&resolved, &mut files)?;
+        files.sort();
+        files.dedup();
+        Ok(files)
+    } else {
+        Ok(vec![resolved])
+    }
+}
+
+fn collect_hl_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ParseError> {
+    let entries = fs::read_dir(dir).map_err(|e| ParseError {
+        line: 1,
+        column: 1,
+        message: format!("Failed to read import directory `{}`: {}", dir.display(), e),
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ParseError {
+            line: 1,
+            column: 1,
+            message: format!("Failed to read import directory entry: {}", e),
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_hl_files_recursive(&path, out)?;
+        } else if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("hl"))
+        {
+            out.push(canonicalize_existing(&path)?);
+        }
+    }
+
+    Ok(())
+}
+
+fn has_glob_magic(spec: &str) -> bool {
+    spec.contains('*') || spec.contains('?') || spec.contains('[')
+}
+
+fn normalize_glob_pattern(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn canonicalize_existing(path: &Path) -> Result<PathBuf, ParseError> {

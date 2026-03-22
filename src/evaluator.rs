@@ -141,6 +141,12 @@ impl Runtime {
                     ret = v;
                     break;
                 }
+                Flow::Break => {
+                    return Err(RuntimeError::new("`break` outside loop"));
+                }
+                Flow::ContinueLoop => {
+                    return Err(RuntimeError::new("`continue` outside loop"));
+                }
             }
         }
 
@@ -175,8 +181,11 @@ impl Runtime {
             Stmt::PortOwn { .. } | Stmt::PortRef { .. } => Ok(Flow::Continue),
             Stmt::YieldPort { body, .. } => {
                 for stmt in body {
-                    if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                        return Ok(Flow::Return(v));
+                    match self.execute_stmt(stmt, frame)? {
+                        Flow::Continue => {}
+                        Flow::Return(v) => return Ok(Flow::Return(v)),
+                        Flow::Break => return Ok(Flow::Break),
+                        Flow::ContinueLoop => return Ok(Flow::ContinueLoop),
                     }
                 }
                 Ok(Flow::Continue)
@@ -201,14 +210,20 @@ impl Runtime {
             } => {
                 if self.eval_expr(condition, frame)?.as_bool()? {
                     for stmt in then_body {
-                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                            return Ok(Flow::Return(v));
+                        match self.execute_stmt(stmt, frame)? {
+                            Flow::Continue => {}
+                            Flow::Return(v) => return Ok(Flow::Return(v)),
+                            Flow::Break => return Ok(Flow::Break),
+                            Flow::ContinueLoop => return Ok(Flow::ContinueLoop),
                         }
                     }
                 } else {
                     for stmt in else_body {
-                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                            return Ok(Flow::Return(v));
+                        match self.execute_stmt(stmt, frame)? {
+                            Flow::Continue => {}
+                            Flow::Return(v) => return Ok(Flow::Return(v)),
+                            Flow::Break => return Ok(Flow::Break),
+                            Flow::ContinueLoop => return Ok(Flow::ContinueLoop),
                         }
                     }
                 }
@@ -219,8 +234,11 @@ impl Runtime {
             } => {
                 while self.eval_expr(condition, frame)?.as_bool()? {
                     for stmt in body {
-                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                            return Ok(Flow::Return(v));
+                        match self.execute_stmt(stmt, frame)? {
+                            Flow::Continue => {}
+                            Flow::Return(v) => return Ok(Flow::Return(v)),
+                            Flow::Break => return Ok(Flow::Continue),
+                            Flow::ContinueLoop => break,
                         }
                     }
                 }
@@ -233,8 +251,11 @@ impl Runtime {
                 }
                 for _ in 0..times {
                     for stmt in body {
-                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                            return Ok(Flow::Return(v));
+                        match self.execute_stmt(stmt, frame)? {
+                            Flow::Continue => {}
+                            Flow::Return(v) => return Ok(Flow::Return(v)),
+                            Flow::Break => return Ok(Flow::Continue),
+                            Flow::ContinueLoop => break,
                         }
                     }
                 }
@@ -262,8 +283,11 @@ impl Runtime {
                     .ok_or_else(|| RuntimeError::new("iter_get did not return a value"))?;
                     frame.vars.insert(name.clone(), item);
                     for stmt in body {
-                        if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                            return Ok(Flow::Return(v));
+                        match self.execute_stmt(stmt, frame)? {
+                            Flow::Continue => {}
+                            Flow::Return(v) => return Ok(Flow::Return(v)),
+                            Flow::Break => return Ok(Flow::Continue),
+                            Flow::ContinueLoop => break,
                         }
                     }
                 }
@@ -271,8 +295,11 @@ impl Runtime {
             }
             Stmt::CycleContract { body, .. } => {
                 for stmt in body {
-                    if let Flow::Return(v) = self.execute_stmt(stmt, frame)? {
-                        return Ok(Flow::Return(v));
+                    match self.execute_stmt(stmt, frame)? {
+                        Flow::Continue => {}
+                        Flow::Return(v) => return Ok(Flow::Return(v)),
+                        Flow::Break => return Ok(Flow::Break),
+                        Flow::ContinueLoop => return Ok(Flow::ContinueLoop),
                     }
                 }
                 Ok(Flow::Continue)
@@ -292,6 +319,8 @@ impl Runtime {
                 };
                 Ok(Flow::Return(value))
             }
+            Stmt::Break { .. } => Ok(Flow::Break),
+            Stmt::Continue { .. } => Ok(Flow::ContinueLoop),
             Stmt::Expr { expr, .. } => {
                 let _ = self.eval_expr(expr, frame)?;
                 Ok(Flow::Continue)
@@ -440,6 +469,8 @@ fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, RuntimeErro
 enum Flow {
     Continue,
     Return(Value),
+    Break,
+    ContinueLoop,
 }
 
 fn eval_const_expr(expr: &Expr) -> Result<Value, RuntimeError> {

@@ -283,6 +283,7 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
                 &mut suppress_unused_symbols,
                 &mut symbol_struct_types,
                 &mut used_symbols,
+                0,
                 source,
             )?;
         }
@@ -341,6 +342,7 @@ fn analyze_stmt(
     suppress_unused_symbols: &mut HashSet<String>,
     symbol_struct_types: &mut HashMap<String, String>,
     used_symbols: &mut HashSet<String>,
+    loop_depth: usize,
     source: &str,
 ) -> Result<(), SemanticError> {
     let stmt_span = stmt.span();
@@ -552,6 +554,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth,
                     source,
                 )?;
             }
@@ -670,6 +673,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth,
                     source,
                 )?;
             }
@@ -692,6 +696,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth,
                     source,
                 )?;
             }
@@ -729,6 +734,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth + 1,
                     source,
                 )?;
             }
@@ -764,6 +770,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth + 1,
                     source,
                 )?;
             }
@@ -814,6 +821,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth + 1,
                     source,
                 )?;
             }
@@ -852,6 +860,7 @@ fn analyze_stmt(
                     suppress_unused_symbols,
                     symbol_struct_types,
                     used_symbols,
+                    loop_depth,
                     source,
                 )?;
             }
@@ -884,6 +893,24 @@ fn analyze_stmt(
                     used_symbols,
                     source,
                 )?;
+            }
+        }
+        Stmt::Break { .. } => {
+            if loop_depth == 0 {
+                return Err(SemanticError::at(
+                    stmt_span,
+                    source,
+                    "`break` is only valid inside loop bodies",
+                ));
+            }
+        }
+        Stmt::Continue { .. } => {
+            if loop_depth == 0 {
+                return Err(SemanticError::at(
+                    stmt_span,
+                    source,
+                    "`continue` is only valid inside loop bodies",
+                ));
             }
         }
         Stmt::Expr { expr, .. } => {

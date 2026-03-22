@@ -327,6 +327,8 @@ impl Lexer {
             "repeat" => TokenKind::KeywordRepeat,
             "for" => TokenKind::KeywordFor,
             "in" => TokenKind::KeywordIn,
+            "break" => TokenKind::KeywordBreak,
+            "continue" => TokenKind::KeywordContinue,
             "return" => TokenKind::KeywordReturn,
             "true" => TokenKind::KeywordTrue,
             "false" => TokenKind::KeywordFalse,

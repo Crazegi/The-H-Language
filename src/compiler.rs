@@ -1000,6 +1000,7 @@ struct FunctionCompiler {
     active_cycle_profile: CycleCostProfile,
     code: Vec<Instruction>,
     struct_fields: HashMap<String, Vec<String>>,
+    loop_stack: Vec<LoopContext>,
     temp_counter: usize,
     contract_counter: usize,
     contract_reports: Vec<ContractCompileReport>,
@@ -1024,11 +1025,19 @@ impl FunctionCompiler {
             active_cycle_profile,
             code: Vec::new(),
             struct_fields,
+            loop_stack: Vec::new(),
             temp_counter: 0,
             contract_counter: 0,
             contract_reports: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct LoopContext {
+    continue_target: Option<usize>,
+    continue_jumps: Vec<usize>,
+    break_jumps: Vec<usize>,
 }
 
 impl FunctionCompiler {
@@ -1148,13 +1157,30 @@ impl FunctionCompiler {
                 let jump_if_false_pos = self.code.len();
                 self.code.push(Instruction::JumpIfFalse(usize::MAX));
 
+                self.loop_stack.push(LoopContext {
+                    continue_target: Some(loop_start),
+                    continue_jumps: Vec::new(),
+                    break_jumps: Vec::new(),
+                });
+
                 for s in body {
                     self.compile_stmt(s)?;
                 }
 
+                let loop_ctx = self
+                    .loop_stack
+                    .pop()
+                    .expect("loop context must exist for while");
+
                 self.code.push(Instruction::Jump(loop_start));
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
+                for break_pos in loop_ctx.break_jumps {
+                    self.patch_jump(break_pos, loop_end)?;
+                }
+                for continue_pos in loop_ctx.continue_jumps {
+                    self.patch_jump(continue_pos, loop_start)?;
+                }
             }
             Stmt::Repeat { times, body, .. } => {
                 self.compile_expr(times)?;
@@ -1168,8 +1194,23 @@ impl FunctionCompiler {
                 let jump_if_false_pos = self.code.len();
                 self.code.push(Instruction::JumpIfFalse(usize::MAX));
 
+                self.loop_stack.push(LoopContext {
+                    continue_target: None,
+                    continue_jumps: Vec::new(),
+                    break_jumps: Vec::new(),
+                });
+
                 for s in body {
                     self.compile_stmt(s)?;
+                }
+
+                let update_start = self.code.len();
+                let loop_ctx = self
+                    .loop_stack
+                    .pop()
+                    .expect("loop context must exist for repeat");
+                for continue_pos in loop_ctx.continue_jumps {
+                    self.patch_jump(continue_pos, update_start)?;
                 }
 
                 self.code.push(Instruction::LoadVar(counter_name.clone()));
@@ -1180,6 +1221,9 @@ impl FunctionCompiler {
 
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
+                for break_pos in loop_ctx.break_jumps {
+                    self.patch_jump(break_pos, loop_end)?;
+                }
             }
             Stmt::For {
                 name,
@@ -1215,8 +1259,23 @@ impl FunctionCompiler {
                 self.code.push(Instruction::Call("iter_get".to_string(), 2));
                 self.code.push(Instruction::StoreVar(name.clone()));
 
+                self.loop_stack.push(LoopContext {
+                    continue_target: None,
+                    continue_jumps: Vec::new(),
+                    break_jumps: Vec::new(),
+                });
+
                 for s in body {
                     self.compile_stmt(s)?;
+                }
+
+                let update_start = self.code.len();
+                let loop_ctx = self
+                    .loop_stack
+                    .pop()
+                    .expect("loop context must exist for for-loop");
+                for continue_pos in loop_ctx.continue_jumps {
+                    self.patch_jump(continue_pos, update_start)?;
                 }
 
                 self.code.push(Instruction::LoadVar(index_name.clone()));
@@ -1227,6 +1286,9 @@ impl FunctionCompiler {
 
                 let loop_end = self.code.len();
                 self.patch_jump(jump_if_false_pos, loop_end)?;
+                for break_pos in loop_ctx.break_jumps {
+                    self.patch_jump(break_pos, loop_end)?;
+                }
             }
             Stmt::CycleContract { .. } => {
                 self.compile_cycle_contract(stmt)?;
@@ -1245,6 +1307,34 @@ impl FunctionCompiler {
                     None => self.code.push(Instruction::PushUnit),
                 }
                 self.code.push(Instruction::Return);
+            }
+            Stmt::Break { span } => {
+                let Some(loop_ctx) = self.loop_stack.last_mut() else {
+                    return Err(CompileError::at(
+                        *span,
+                        &self.source,
+                        "`break` is only valid inside loop bodies",
+                    ));
+                };
+                let jump_pos = self.code.len();
+                self.code.push(Instruction::Jump(usize::MAX));
+                loop_ctx.break_jumps.push(jump_pos);
+            }
+            Stmt::Continue { span } => {
+                let Some(loop_ctx) = self.loop_stack.last_mut() else {
+                    return Err(CompileError::at(
+                        *span,
+                        &self.source,
+                        "`continue` is only valid inside loop bodies",
+                    ));
+                };
+                if let Some(target) = loop_ctx.continue_target {
+                    self.code.push(Instruction::Jump(target));
+                } else {
+                    let jump_pos = self.code.len();
+                    self.code.push(Instruction::Jump(usize::MAX));
+                    loop_ctx.continue_jumps.push(jump_pos);
+                }
             }
             Stmt::Expr { expr, .. } => {
                 self.compile_expr(expr)?;

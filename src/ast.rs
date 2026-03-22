@@ -119,6 +119,12 @@ pub enum Stmt {
         expr: Option<Expr>,
         span: Span,
     },
+    Break {
+        span: Span,
+    },
+    Continue {
+        span: Span,
+    },
     Expr {
         expr: Expr,
         span: Span,
@@ -184,6 +190,8 @@ impl Stmt {
             | Stmt::CycleContract { span, .. }
             | Stmt::PrintBlock { span, .. }
             | Stmt::Return { span, .. }
+            | Stmt::Break { span, .. }
+            | Stmt::Continue { span, .. }
             | Stmt::Expr { span, .. } => *span,
         }
     }
