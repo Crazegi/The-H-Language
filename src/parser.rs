@@ -139,6 +139,15 @@ impl Parser {
         }
 
         if self.match_kind(TokenKind::KeywordOwn) {
+            if self.match_kind(TokenKind::LBracket) {
+                let port = self
+                    .expect_identifier_like("Expected port identifier after `own [`")?
+                    .lexeme;
+                self.expect(TokenKind::RBracket, "Expected `]` after port identifier")?;
+                self.consume_stmt_terminator();
+                return Ok(Stmt::PortOwn { port });
+            }
+
             let name = self.expect_identifier_like("Expected identifier after `own`")?.lexeme;
             self.expect(TokenKind::Assign, "Expected `=` in own declaration")?;
             let expr = self.parse_expression()?;
@@ -147,10 +156,27 @@ impl Parser {
         }
 
         if self.match_kind(TokenKind::KeywordRef) {
+            if self.match_kind(TokenKind::LBracket) {
+                let port = self
+                    .expect_identifier_like("Expected port identifier after `ref [`")?
+                    .lexeme;
+                self.expect(TokenKind::RBracket, "Expected `]` after port identifier")?;
+                self.consume_stmt_terminator();
+                return Ok(Stmt::PortRef { port });
+            }
+
             let name = self.expect_identifier_like("Expected identifier after `ref`")?.lexeme;
             self.expect(TokenKind::Assign, "Expected `=` in ref declaration")?;
             self.expect(TokenKind::Ampersand, "Expected `&` in ref declaration")?;
-            let target = self.expect_identifier_like("Expected referenced identifier")?.lexeme;
+            let target = if self.match_kind(TokenKind::LBracket) {
+                let port = self
+                    .expect_identifier_like("Expected referenced port identifier")?
+                    .lexeme;
+                self.expect(TokenKind::RBracket, "Expected `]` after referenced port")?;
+                format!("[{}]", port)
+            } else {
+                self.expect_identifier_like("Expected referenced identifier")?.lexeme
+            };
             self.consume_stmt_terminator();
             return Ok(Stmt::RefDecl { name, target });
         }

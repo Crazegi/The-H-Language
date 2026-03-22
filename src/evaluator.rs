@@ -123,7 +123,10 @@ impl Runtime {
                 Ok(Flow::Continue)
             }
             Stmt::RefDecl { name, target } => {
-                if !frame.vars.contains_key(target) && !self.globals.contains_key(target) {
+                if !is_memory_target(target)
+                    && !frame.vars.contains_key(target)
+                    && !self.globals.contains_key(target)
+                {
                     return Err(RuntimeError::new(format!(
                         "Cannot borrow unknown symbol `{}`",
                         target
@@ -132,6 +135,7 @@ impl Runtime {
                 frame.vars.insert(name.clone(), Value::Ref(target.clone()));
                 Ok(Flow::Continue)
             }
+            Stmt::PortOwn { .. } | Stmt::PortRef { .. } => Ok(Flow::Continue),
             Stmt::Assign { name, expr } => {
                 let value = self.eval_expr(expr, frame)?;
                 self.assign(frame, name, value)?;

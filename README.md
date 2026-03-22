@@ -39,6 +39,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Sections: `section .data:` and `section .text:`
 - Functions: `fn name(a, b):` with indentation-based blocks
 - Ownership/borrowing: `own` and `ref`
+- Hardware port ownership: `own [port_a]`, `ref [port_a]`, and `ref alias = &[port_a]`
 - Typed declarations in block syntax: `int`, `string`, `bool`
 - Assembly instructions: `mov`, `add`, `sub`, `mul`, `div`, `mod`, `cmp`
 - Memory-mapped destination style: `mov [port_a], r1`
@@ -50,6 +51,149 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - logic: `phase`, `collapse`
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
+
+## Hardware Port Ownership (Long Note)
+
+### Why this exists
+
+In normal memory safety discussions, the big risk is two references writing the same RAM location.
+In embedded systems, a different class of failure is often more dangerous in practice:
+
+- Two unrelated code paths drive the same physical pin or bus.
+- Timing overlaps happen under load, interrupts, or integration changes.
+- Hardware sees conflicting levels/frames and behaves unpredictably.
+
+Examples of real failures this can cause:
+
+- I2C arbitration corruption when two drivers push to the same line ownership domain.
+- GPIO glitching when one routine toggles while another assumes stable output.
+- Radio transaction corruption when TX control is triggered concurrently.
+
+H now models this as a compile-time ownership rule for memory-mapped ports.
+
+### The model in one sentence
+
+If code writes `mov [port_x], ...`, that function must hold explicit ownership/borrow rights
+for `port_x`, or compilation fails.
+
+### Syntax
+
+Ownership declaration:
+
+```text
+own [port_a]
+```
+
+Borrow declaration:
+
+```text
+ref [port_a]
+```
+
+Alias borrow form:
+
+```text
+ref tx = &[radio_tx]
+```
+
+Port write:
+
+```text
+mov [port_a], r1
+```
+
+### What is enforced
+
+1. Local write permission:
+- A function cannot write to `[port]` unless it has `own [port]` or `ref [port]` in scope
+  (directly or via `ref alias = &[port]`).
+
+2. Global owner collision prevention:
+- If two different functions claim `own [same_port]`, semantic analysis fails.
+- This blocks accidental multi-owner architecture drift as the codebase grows.
+
+3. Compile-time rejection with explicit diagnostics:
+- Missing ownership gives a direct compile/semantic error.
+- Duplicate owners across functions give a dedicated ownership-collision error.
+
+### Practical usage pattern
+
+A good baseline pattern for embedded modules:
+
+1. Assign one owner function per physical endpoint.
+2. Let helper routines use `ref [port]` if they must touch that endpoint.
+3. Keep all `mov [port], ...` operations inside owned/borrowed contexts.
+
+This naturally creates a hardware access map in code, without separate spreadsheets.
+
+### Example: valid pattern
+
+```text
+section .text:
+  fn radio_send(byte):
+    own [radio_tx]
+    own r1 = byte
+    mov [radio_tx], r1
+    return r1
+```
+
+### Example: rejected pattern (no ownership)
+
+```text
+section .text:
+  fn bad():
+    own r1 = 1
+    mov [port_a], r1
+    return r1
+```
+
+Reason: write to `[port_a]` without `own [port_a]` or `ref [port_a]`.
+
+### Example: rejected pattern (two owners)
+
+```text
+section .text:
+  fn a():
+    own [port_a]
+    own r1 = 1
+    mov [port_a], r1
+    return r1
+
+  fn b():
+    own [port_a]
+    own r2 = 2
+    mov [port_a], r2
+    return r2
+```
+
+Reason: ownership collision, both `a` and `b` claim exclusive ownership.
+
+### Relationship to contracts
+
+Port ownership and cycle/energy contracts are complementary:
+
+- Ownership answers: "Who is allowed to drive this hardware endpoint?"
+- Cycle contract answers: "How long does this critical block run?"
+- Energy contract answers: "How much energy does this block consume?"
+
+Together they provide a stronger embedded safety envelope:
+- structural safety (ownership),
+- temporal safety (cycles),
+- power safety (energy).
+
+### Current scope and future direction
+
+Current scope is intentionally strict and simple:
+
+- ownership is function-level and compile-time checked,
+- collisions are prevented early,
+- runtime behavior remains unchanged (these are semantic guarantees).
+
+Natural next expansions:
+
+- explicit ownership transfer semantics between functions,
+- scoped ownership blocks,
+- capability-like port tokens for larger system decomposition.
 
 ## Cycle Contracts
 
@@ -71,6 +215,7 @@ Rules:
 - `execute` supports deterministic statements: assembly instructions, `own`/assignment, `if`, and `repeat`.
 - `if` conditions and `repeat` counts inside `execute` must be compile-time constants.
 - Function calls are rejected inside `execute`.
+- Memory-mapped writes require hardware ownership (`own [port]` or `ref [port]`).
 - Underflow can be padded with inserted `nop` instructions.
 - Overflow can be rejected as a compile-time error.
 - If `energy_nj` is set, compile fails when measured execute energy exceeds budget.

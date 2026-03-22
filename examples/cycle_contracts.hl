@@ -6,6 +6,7 @@ section .text:
   fn timed_pulse():
     own r1 = 10
     own r2 = 3
+    own [port_a]
 
     // Generic profile: add(1) + mov(1) = 2 cycles, so this pads 1 nop.
     contract:

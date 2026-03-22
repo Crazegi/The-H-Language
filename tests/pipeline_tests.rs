@@ -106,6 +106,7 @@ fn parses_and_runs_cycle_contract_execute_block() {
   fn hardware_pulse():
     own r1 = 0x01
     own r2 = 0x00
+    own [port_a]
 
     contract:
       cycles: 16
@@ -173,4 +174,39 @@ fn semantic_rejects_while_inside_execute_block() {
     assert!(err
         .message
         .contains("supports deterministic statements only"));
+}
+
+#[test]
+fn semantic_rejects_port_write_without_ownership() {
+    let src = r#"section .text:
+  fn main():
+    own r1 = 1
+    mov [port_a], r1
+    return r1
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("port write without ownership should fail");
+    assert!(err.message.contains("requires hardware ownership"));
+}
+
+#[test]
+fn semantic_rejects_duplicate_port_owners_across_functions() {
+    let src = r#"section .text:
+  fn a():
+    own [port_a]
+    own r1 = 1
+    mov [port_a], r1
+    return r1
+
+  fn b():
+    own [port_a]
+    own r2 = 2
+    mov [port_a], r2
+    return r2
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("duplicate port ownership should fail");
+    assert!(err.message.contains("ownership collision"));
 }

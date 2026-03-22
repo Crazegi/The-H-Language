@@ -31,6 +31,8 @@ pub struct CycleContract {
 pub enum Stmt {
     OwnDecl { name: String, expr: Expr },
     RefDecl { name: String, target: String },
+    PortOwn { port: String },
+    PortRef { port: String },
     Assign { name: String, expr: Expr },
     Instruction { op: Instruction, target: String, rhs: Expr },
     If {

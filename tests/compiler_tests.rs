@@ -93,6 +93,7 @@ fn cycle_contract_underflow_pads_with_nop() {
   fn main():
     own r1 = 1
     own r2 = 2
+    own [port_a]
     contract:
       cycles: 5
       on_underflow: "pad_nop"
@@ -125,6 +126,7 @@ fn cycle_contract_overflow_reports_compile_error() {
   fn main():
     own r1 = 4
     own r2 = 3
+    own [port_a]
     contract:
       cycles: 1
       on_underflow: "pad_nop"
@@ -147,6 +149,7 @@ fn cycle_profile_changes_contract_budget_behavior() {
   fn main():
     own r1 = 20
     own r2 = 4
+    own [port_a]
     contract:
       cycles: 3
       on_underflow: "pad_nop"
@@ -198,6 +201,7 @@ fn contract_report_contains_profile_and_padding() {
   fn main():
     own r1 = 1
     own r2 = 2
+    own [port_a]
     contract:
       cycles: 5
       on_underflow: "pad_nop"
@@ -289,6 +293,7 @@ fn relaxed_contract_mode_allows_compile_error_policies() {
   fn main():
     own r1 = 9
     own r2 = 3
+    own [port_a]
     contract:
       cycles: 1
       on_underflow: "compile_error"
@@ -372,6 +377,7 @@ fn cycle_contract_rejects_non_constant_if_condition() {
     let src = r#"section .text:
   fn main():
     own gate = maybe
+    own [port_a]
     contract:
       cycles: 4
       on_underflow: "pad_nop"
@@ -398,6 +404,7 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
     let src = r#"section .text:
   fn main():
     own n = 2
+    own [port_a]
     contract:
       cycles: 4
       on_underflow: "pad_nop"
@@ -433,6 +440,7 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
   fn main():
     own r1 = 20
     own r2 = 4
+    own [port_a]
     contract:
       cycles: 3
       on_underflow: "pad_nop"
@@ -482,6 +490,7 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
   fn main():
     own r1 = 1
     own r2 = 2
+    own [port_a]
     contract:
       cycles: 4
       on_underflow: "pad_nop"
@@ -522,6 +531,7 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
   fn main():
     own r1 = 1
     own r2 = 2
+    own [port_a]
     contract:
       cycles: 4
       on_underflow: "pad_nop"
@@ -599,6 +609,7 @@ fn cycle_contract_rejects_non_constant_repeat_count() {
   fn main():
     own r1 = 2
     own r2 = 3
+    own [port_a]
     contract:
       cycles: 6
       on_underflow: "pad_nop"
@@ -651,6 +662,7 @@ extends = "generic"
     let src = r#"section .text:
   fn main():
     own r1 = 1
+    own [radio_tx]
     contract:
       cycles: 20
       energy_nj: 20
@@ -690,6 +702,7 @@ fn contract_report_contains_energy_fields_when_present() {
     let src = r#"section .text:
   fn main():
     own r1 = 1
+    own [port_a]
     contract:
       cycles: 8
       energy_nj: 20

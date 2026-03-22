@@ -40,11 +40,46 @@ pub fn analyze(program: &Program) -> Result<(), SemanticError> {
         ));
     }
 
+    let mut port_owners: HashMap<String, String> = HashMap::new();
+    for f in &program.functions {
+        let mut owned_here = Vec::new();
+        for stmt in &f.body {
+            collect_owned_ports_stmt(stmt, &mut owned_here);
+        }
+
+        for port in owned_here {
+            if let Some(prev_owner) = port_owners.get(&port) {
+                if prev_owner != &f.name {
+                    return Err(SemanticError::new(format!(
+                        "Hardware port `{}` ownership collision: functions `{}` and `{}` both own it",
+                        port, prev_owner, f.name
+                    )));
+                }
+            } else {
+                port_owners.insert(port, f.name.clone());
+            }
+        }
+    }
+
     for f in &program.functions {
         let mut symbols: HashSet<String> = f.params.iter().cloned().collect();
         let mut refs: HashSet<String> = HashSet::new();
+        let mut port_access: HashSet<String> = HashSet::new();
+        for (port, owner_fn) in &port_owners {
+            if owner_fn == &f.name {
+                port_access.insert(port.clone());
+            }
+        }
         for stmt in &f.body {
-            analyze_stmt(stmt, &mut symbols, &mut refs, &program.data, &signatures)?;
+            analyze_stmt(
+                stmt,
+                &mut symbols,
+                &mut refs,
+                &mut port_access,
+                &port_owners,
+                &program.data,
+                &signatures,
+            )?;
         }
     }
 
@@ -55,6 +90,8 @@ fn analyze_stmt(
     stmt: &Stmt,
     symbols: &mut HashSet<String>,
     refs: &mut HashSet<String>,
+    port_access: &mut HashSet<String>,
+    port_owners: &HashMap<String, String>,
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
 ) -> Result<(), SemanticError> {
@@ -73,7 +110,15 @@ fn analyze_stmt(
             if symbols.contains(name) {
                 return Err(SemanticError::new(format!("`{}` already declared", name)));
             }
-            if !symbols.contains(target) && !data.contains_key(target) {
+            if let Some(port) = memory_target_name(target) {
+                if !port_access.contains(port) && !port_owners.contains_key(port) {
+                    return Err(SemanticError::new(format!(
+                        "Cannot borrow unknown hardware port `{}`",
+                        port
+                    )));
+                }
+                port_access.insert(port.to_string());
+            } else if !symbols.contains(target) && !data.contains_key(target) {
                 return Err(SemanticError::new(format!(
                     "Cannot borrow unknown symbol `{}`",
                     target
@@ -81,6 +126,18 @@ fn analyze_stmt(
             }
             symbols.insert(name.clone());
             refs.insert(name.clone());
+        }
+        Stmt::PortOwn { port } => {
+            port_access.insert(port.clone());
+        }
+        Stmt::PortRef { port } => {
+            if !port_access.contains(port) && !port_owners.contains_key(port) {
+                return Err(SemanticError::new(format!(
+                    "Cannot borrow hardware port `{}` without an owner",
+                    port
+                )));
+            }
+            port_access.insert(port.clone());
         }
         Stmt::Assign { name, expr } => {
             if !symbols.contains(name) {
@@ -98,7 +155,14 @@ fn analyze_stmt(
             analyze_expr(expr, symbols, data, signatures)?;
         }
         Stmt::Instruction { target, rhs, .. } => {
-            if !is_memory_target(target) && !symbols.contains(target) {
+            if let Some(port) = memory_target_name(target) {
+                if !port_access.contains(port) {
+                    return Err(SemanticError::new(format!(
+                        "Instruction target `{}` requires hardware ownership (`own [{}]` or `ref [{}]`)",
+                        target, port, port
+                    )));
+                }
+            } else if !symbols.contains(target) {
                 return Err(SemanticError::new(format!(
                     "Instruction target `{}` is undeclared",
                     target
@@ -119,22 +183,22 @@ fn analyze_stmt(
         } => {
             analyze_expr(condition, symbols, data, signatures)?;
             for s in then_body {
-                analyze_stmt(s, symbols, refs, data, signatures)?;
+                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
             }
             for s in else_body {
-                analyze_stmt(s, symbols, refs, data, signatures)?;
+                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
             }
         }
         Stmt::While { condition, body } => {
             analyze_expr(condition, symbols, data, signatures)?;
             for s in body {
-                analyze_stmt(s, symbols, refs, data, signatures)?;
+                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
             }
         }
         Stmt::Repeat { times, body } => {
             analyze_expr(times, symbols, data, signatures)?;
             for s in body {
-                analyze_stmt(s, symbols, refs, data, signatures)?;
+                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
             }
         }
         Stmt::CycleContract { spec, body } => {
@@ -147,7 +211,7 @@ fn analyze_stmt(
                         "Cycle contract execute block supports deterministic statements only: instruction, own/assign, if, repeat",
                     ));
                 }
-                analyze_stmt(s, symbols, refs, data, signatures)?;
+                analyze_stmt(s, symbols, refs, port_access, port_owners, data, signatures)?;
             }
         }
         Stmt::PrintBlock(fields) => {
@@ -244,9 +308,47 @@ fn is_memory_target(target: &str) -> bool {
     target.starts_with('[') && target.ends_with(']') && target.len() > 2
 }
 
+fn memory_target_name(target: &str) -> Option<&str> {
+    if is_memory_target(target) {
+        Some(&target[1..target.len() - 1])
+    } else {
+        None
+    }
+}
+
+fn collect_owned_ports_stmt(stmt: &Stmt, out: &mut Vec<String>) {
+    match stmt {
+        Stmt::PortOwn { port } => out.push(port.clone()),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for s in then_body {
+                collect_owned_ports_stmt(s, out);
+            }
+            for s in else_body {
+                collect_owned_ports_stmt(s, out);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::Repeat { body, .. }
+        | Stmt::CycleContract { body, .. } => {
+            for s in body {
+                collect_owned_ports_stmt(s, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn is_execute_stmt_shape_supported(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Instruction { .. } | Stmt::OwnDecl { .. } | Stmt::Assign { .. } => true,
+        Stmt::Instruction { .. }
+        | Stmt::OwnDecl { .. }
+        | Stmt::Assign { .. }
+        | Stmt::PortOwn { .. }
+        | Stmt::PortRef { .. } => true,
         Stmt::If {
             then_body,
             else_body,

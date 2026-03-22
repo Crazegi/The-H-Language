@@ -986,6 +986,7 @@ impl FunctionCompiler {
                     target: target.clone(),
                 });
             }
+            Stmt::PortOwn { .. } | Stmt::PortRef { .. } => {}
             Stmt::Assign { name, expr } => {
                 self.compile_expr(expr)?;
                 self.code.push(Instruction::StoreVar(name.clone()));
@@ -1373,6 +1374,10 @@ impl FunctionCompiler {
 
                 Ok(ExecuteCost { cycles, energy_nj })
             }
+            Stmt::PortOwn { .. } | Stmt::PortRef { .. } => Ok(ExecuteCost {
+                cycles: 0,
+                energy_nj: 0,
+            }),
             Stmt::OwnDecl { name, expr } => {
                 self.compile_stmt(stmt)?;
                 let mut cycles = expr_cycle_cost(expr, &self.active_cycle_profile)?;
