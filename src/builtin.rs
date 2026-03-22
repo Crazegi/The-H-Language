@@ -59,6 +59,25 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "ring_len" => Some(1),
         "ring_push" => Some(2),
         "ring_peek" => Some(1),
+        "gpio_claim" => Some(1),
+        "gpio_mode" => Some(2),
+        "gpio_write" => Some(2),
+        "gpio_read" => Some(1),
+        "uart_new" => Some(2),
+        "uart_write" => Some(2),
+        "uart_read" => Some(1),
+        "spi_new" => Some(3),
+        "spi_transfer" => Some(2),
+        "i2c_new" => Some(2),
+        "i2c_write" => Some(3),
+        "i2c_read" => Some(3),
+        "timer_new" => Some(2),
+        "timer_start" => Some(2),
+        "timer_elapsed" => Some(1),
+        "watchdog_new" => Some(2),
+        "watchdog_feed" => Some(1),
+        "dma_new" => Some(1),
+        "dma_transfer" => Some(4),
         "window_loop" => Some(2),
         "menu" => Some(2),
         "http_get" => Some(1),
@@ -386,6 +405,164 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
                 None => Value::Maybe,
             }
         }
+        "gpio_claim" => {
+            let port = str_arg(args, 0)?;
+            if !is_memory_target_syntax(port) {
+                return Err("gpio_claim expects memory-target style port like `[port_a]`".to_string());
+            }
+            Value::Str(format!("gpio:{}:owned", port))
+        }
+        "gpio_mode" => {
+            let handle = str_arg(args, 0)?;
+            let mode = str_arg(args, 1)?;
+            let allowed = ["in", "out", "pullup", "pulldown"];
+            if !allowed.contains(&mode) {
+                return Err("gpio_mode expects one of: in, out, pullup, pulldown".to_string());
+            }
+            ensure_gpio_handle(handle)?;
+            Value::Str(format!("{}:mode={}", handle, mode))
+        }
+        "gpio_write" => {
+            let handle = str_arg(args, 0)?;
+            let value = int_arg(args, 1)?;
+            if value != 0 && value != 1 {
+                return Err("gpio_write expects value 0 or 1".to_string());
+            }
+            ensure_gpio_handle(handle)?;
+            Value::Bool(true)
+        }
+        "gpio_read" => {
+            let handle = str_arg(args, 0)?;
+            ensure_gpio_handle(handle)?;
+            Value::Int((stable_hash(handle) & 1) as i64)
+        }
+        "uart_new" => {
+            let bus = str_arg(args, 0)?;
+            let baud = int_arg(args, 1)?;
+            if baud <= 0 {
+                return Err("uart_new expects baud > 0".to_string());
+            }
+            Value::Str(format!("uart:{}:baud={}", bus, baud))
+        }
+        "uart_write" => {
+            let uart = str_arg(args, 0)?;
+            let payload = str_arg(args, 1)?;
+            ensure_handle_prefix(uart, "uart:", "uart_write")?;
+            Value::Int(payload.len() as i64)
+        }
+        "uart_read" => {
+            let uart = str_arg(args, 0)?;
+            ensure_handle_prefix(uart, "uart:", "uart_read")?;
+            Value::Str("uart_rx_stub".to_string())
+        }
+        "spi_new" => {
+            let bus = str_arg(args, 0)?;
+            let hz = int_arg(args, 1)?;
+            let mode = int_arg(args, 2)?;
+            if hz <= 0 {
+                return Err("spi_new expects hz > 0".to_string());
+            }
+            if !(0..=3).contains(&mode) {
+                return Err("spi_new expects mode in range 0..3".to_string());
+            }
+            Value::Str(format!("spi:{}:hz={}:mode={}", bus, hz, mode))
+        }
+        "spi_transfer" => {
+            let spi = str_arg(args, 0)?;
+            let payload = str_arg(args, 1)?;
+            ensure_handle_prefix(spi, "spi:", "spi_transfer")?;
+            Value::Str(payload.to_string())
+        }
+        "i2c_new" => {
+            let bus = str_arg(args, 0)?;
+            let hz = int_arg(args, 1)?;
+            if hz <= 0 {
+                return Err("i2c_new expects hz > 0".to_string());
+            }
+            Value::Str(format!("i2c:{}:hz={}", bus, hz))
+        }
+        "i2c_write" => {
+            let i2c = str_arg(args, 0)?;
+            let address = int_arg(args, 1)?;
+            let _payload = str_arg(args, 2)?;
+            ensure_handle_prefix(i2c, "i2c:", "i2c_write")?;
+            if !(0..=0x7F).contains(&address) {
+                return Err("i2c_write expects 7-bit address in range 0..127".to_string());
+            }
+            Value::Bool(true)
+        }
+        "i2c_read" => {
+            let i2c = str_arg(args, 0)?;
+            let address = int_arg(args, 1)?;
+            let count = int_arg(args, 2)?;
+            ensure_handle_prefix(i2c, "i2c:", "i2c_read")?;
+            if !(0..=0x7F).contains(&address) {
+                return Err("i2c_read expects 7-bit address in range 0..127".to_string());
+            }
+            if count < 0 {
+                return Err("i2c_read expects non-negative byte count".to_string());
+            }
+            let byte = format!("{:02X}", address);
+            let mut out = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                out.push(byte.clone());
+            }
+            Value::Str(out.join(" "))
+        }
+        "timer_new" => {
+            let name = str_arg(args, 0)?;
+            let hz = int_arg(args, 1)?;
+            if hz <= 0 {
+                return Err("timer_new expects hz > 0".to_string());
+            }
+            Value::Str(format!("timer:{}:hz={}", name, hz))
+        }
+        "timer_start" => {
+            let timer = str_arg(args, 0)?;
+            let cycles = int_arg(args, 1)?;
+            ensure_handle_prefix(timer, "timer:", "timer_start")?;
+            if cycles <= 0 {
+                return Err("timer_start expects cycles > 0".to_string());
+            }
+            Value::Str(format!("{}:cycles={}", timer, cycles))
+        }
+        "timer_elapsed" => {
+            let timer = str_arg(args, 0)?;
+            ensure_handle_prefix(timer, "timer:", "timer_elapsed")?;
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "System time is before UNIX_EPOCH".to_string())?;
+            Value::Int((now.as_micros() % 1_000_000) as i64)
+        }
+        "watchdog_new" => {
+            let name = str_arg(args, 0)?;
+            let timeout_ms = int_arg(args, 1)?;
+            if timeout_ms <= 0 {
+                return Err("watchdog_new expects timeout_ms > 0".to_string());
+            }
+            Value::Str(format!("watchdog:{}:ms={}", name, timeout_ms))
+        }
+        "watchdog_feed" => {
+            let watchdog = str_arg(args, 0)?;
+            ensure_handle_prefix(watchdog, "watchdog:", "watchdog_feed")?;
+            Value::Bool(true)
+        }
+        "dma_new" => {
+            let channel = str_arg(args, 0)?;
+            Value::Str(format!("dma:{}", channel))
+        }
+        "dma_transfer" => {
+            let dma = str_arg(args, 0)?;
+            let src = str_arg(args, 1)?;
+            let dst = str_arg(args, 2)?;
+            let bytes = int_arg(args, 3)?;
+            ensure_handle_prefix(dma, "dma:", "dma_transfer")?;
+            if bytes < 0 {
+                return Err("dma_transfer expects non-negative byte count".to_string());
+            }
+            let _ = (src, dst);
+            Value::Bool(true)
+        }
         "window_loop" => {
             let title = str_arg(args, 0)?;
             let ticks = int_arg(args, 1)?;
@@ -633,6 +810,38 @@ fn parse_ring(raw: &str) -> Result<(i64, Vec<String>), String> {
 
 fn format_ring(capacity: i64, items: &[String]) -> String {
     format!("{}{}{}", capacity, RING_CAP_SEPARATOR, items.join(SEQ_SEPARATOR_STR))
+}
+
+fn is_memory_target_syntax(value: &str) -> bool {
+    value.starts_with('[') && value.ends_with(']') && value.len() > 2
+}
+
+fn ensure_handle_prefix(handle: &str, prefix: &str, builtin_name: &str) -> Result<(), String> {
+    if handle.starts_with(prefix) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} expects handle produced by matching *_new builtin",
+            builtin_name
+        ))
+    }
+}
+
+fn ensure_gpio_handle(handle: &str) -> Result<(), String> {
+    if handle.starts_with("gpio:[") && handle.contains("]:owned") {
+        Ok(())
+    } else {
+        Err("gpio builtin expects handle from gpio_claim".to_string())
+    }
+}
+
+fn stable_hash(input: &str) -> u64 {
+    let mut hash = 1469598103934665603u64;
+    for b in input.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211u64);
+    }
+    hash
 }
 
 fn escape_json_string(input: &str) -> String {

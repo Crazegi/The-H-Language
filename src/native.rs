@@ -281,6 +281,10 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("fn format_scaled_thousand(value: i64) -> String { let negative = value < 0; let abs = value.unsigned_abs(); let whole = abs / 1000; let frac = abs % 1000; if negative { format!(\"-{}.{:03}\", whole, frac) } else { format!(\"{}.{:03}\", whole, frac) } }\n\n");
     out.push_str("fn parse_ring(raw: &str) -> Result<(i64, Vec<String>), String> { let mut parts = raw.splitn(2, RING_CAP_SEPARATOR); let cap_part = parts.next().unwrap_or_default().trim(); let payload = parts.next().unwrap_or_default(); if cap_part.is_empty() { return Err(\"ring value is invalid: missing capacity\".to_string()); } let capacity = cap_part.parse::<i64>().map_err(|e| format!(\"ring value is invalid: {}\", e))?; if capacity <= 0 { return Err(\"ring value is invalid: capacity must be > 0\".to_string()); } Ok((capacity, sequence_items(payload))) }\n\n");
     out.push_str("fn format_ring(capacity: i64, items: &[String]) -> String { format!(\"{}{}{}\", capacity, RING_CAP_SEPARATOR, items.join(SEQ_SEPARATOR_STR)) }\n\n");
+    out.push_str("fn is_memory_target_syntax(value: &str) -> bool { value.starts_with('[') && value.ends_with(']') && value.len() > 2 }\n\n");
+    out.push_str("fn ensure_handle_prefix(handle: &str, prefix: &str, builtin_name: &str) -> Result<(), String> { if handle.starts_with(prefix) { Ok(()) } else { Err(format!(\"{} expects handle produced by matching *_new builtin\", builtin_name)) } }\n\n");
+    out.push_str("fn ensure_gpio_handle(handle: &str) -> Result<(), String> { if handle.starts_with(\"gpio:[\") && handle.contains(\"]:owned\") { Ok(()) } else { Err(\"gpio builtin expects handle from gpio_claim\".to_string()) } }\n\n");
+    out.push_str("fn stable_hash(input: &str) -> u64 { let mut hash = 1469598103934665603u64; for b in input.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(1099511628211u64); } hash }\n\n");
 
     out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
     out.push_str("  let out = match name {\n");
@@ -335,6 +339,25 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"ring_len\" => { let ring = builtin_str_arg(args, 0)?; let (_, items) = parse_ring(ring)?; Value::Int(items.len() as i64) },\n");
     out.push_str("    \"ring_push\" => { let ring = builtin_str_arg(args, 0)?; let item = builtin_str_arg(args, 1)?; let (capacity, mut items) = parse_ring(ring)?; items.push(item.to_string()); while items.len() > capacity as usize { items.remove(0); } Value::Str(format_ring(capacity, &items)) },\n");
     out.push_str("    \"ring_peek\" => { let ring = builtin_str_arg(args, 0)?; let (_, items) = parse_ring(ring)?; match items.first() { Some(v) => Value::Str(v.clone()), None => Value::Maybe } },\n");
+    out.push_str("    \"gpio_claim\" => { let port = builtin_str_arg(args, 0)?; if !is_memory_target_syntax(port) { return Err(\"gpio_claim expects memory-target style port like `[port_a]`\".to_string()); } Value::Str(format!(\"gpio:{}:owned\", port)) },\n");
+    out.push_str("    \"gpio_mode\" => { let handle = builtin_str_arg(args, 0)?; let mode = builtin_str_arg(args, 1)?; let allowed = [\"in\", \"out\", \"pullup\", \"pulldown\"]; if !allowed.contains(&mode) { return Err(\"gpio_mode expects one of: in, out, pullup, pulldown\".to_string()); } ensure_gpio_handle(handle)?; Value::Str(format!(\"{}:mode={}\", handle, mode)) },\n");
+    out.push_str("    \"gpio_write\" => { let handle = builtin_str_arg(args, 0)?; let value = builtin_int_arg(args, 1)?; if value != 0 && value != 1 { return Err(\"gpio_write expects value 0 or 1\".to_string()); } ensure_gpio_handle(handle)?; Value::Bool(true) },\n");
+    out.push_str("    \"gpio_read\" => { let handle = builtin_str_arg(args, 0)?; ensure_gpio_handle(handle)?; Value::Int((stable_hash(handle) & 1) as i64) },\n");
+    out.push_str("    \"uart_new\" => { let bus = builtin_str_arg(args, 0)?; let baud = builtin_int_arg(args, 1)?; if baud <= 0 { return Err(\"uart_new expects baud > 0\".to_string()); } Value::Str(format!(\"uart:{}:baud={}\", bus, baud)) },\n");
+    out.push_str("    \"uart_write\" => { let uart = builtin_str_arg(args, 0)?; let payload = builtin_str_arg(args, 1)?; ensure_handle_prefix(uart, \"uart:\", \"uart_write\")?; Value::Int(payload.len() as i64) },\n");
+    out.push_str("    \"uart_read\" => { let uart = builtin_str_arg(args, 0)?; ensure_handle_prefix(uart, \"uart:\", \"uart_read\")?; Value::Str(\"uart_rx_stub\".to_string()) },\n");
+    out.push_str("    \"spi_new\" => { let bus = builtin_str_arg(args, 0)?; let hz = builtin_int_arg(args, 1)?; let mode = builtin_int_arg(args, 2)?; if hz <= 0 { return Err(\"spi_new expects hz > 0\".to_string()); } if !(0..=3).contains(&mode) { return Err(\"spi_new expects mode in range 0..3\".to_string()); } Value::Str(format!(\"spi:{}:hz={}:mode={}\", bus, hz, mode)) },\n");
+    out.push_str("    \"spi_transfer\" => { let spi = builtin_str_arg(args, 0)?; let payload = builtin_str_arg(args, 1)?; ensure_handle_prefix(spi, \"spi:\", \"spi_transfer\")?; Value::Str(payload.to_string()) },\n");
+    out.push_str("    \"i2c_new\" => { let bus = builtin_str_arg(args, 0)?; let hz = builtin_int_arg(args, 1)?; if hz <= 0 { return Err(\"i2c_new expects hz > 0\".to_string()); } Value::Str(format!(\"i2c:{}:hz={}\", bus, hz)) },\n");
+    out.push_str("    \"i2c_write\" => { let i2c = builtin_str_arg(args, 0)?; let address = builtin_int_arg(args, 1)?; let _payload = builtin_str_arg(args, 2)?; ensure_handle_prefix(i2c, \"i2c:\", \"i2c_write\")?; if !(0..=0x7F).contains(&address) { return Err(\"i2c_write expects 7-bit address in range 0..127\".to_string()); } Value::Bool(true) },\n");
+    out.push_str("    \"i2c_read\" => { let i2c = builtin_str_arg(args, 0)?; let address = builtin_int_arg(args, 1)?; let count = builtin_int_arg(args, 2)?; ensure_handle_prefix(i2c, \"i2c:\", \"i2c_read\")?; if !(0..=0x7F).contains(&address) { return Err(\"i2c_read expects 7-bit address in range 0..127\".to_string()); } if count < 0 { return Err(\"i2c_read expects non-negative byte count\".to_string()); } let byte = format!(\"{:02X}\", address); let mut out = Vec::with_capacity(count as usize); for _ in 0..count { out.push(byte.clone()); } Value::Str(out.join(\" \")) },\n");
+    out.push_str("    \"timer_new\" => { let name = builtin_str_arg(args, 0)?; let hz = builtin_int_arg(args, 1)?; if hz <= 0 { return Err(\"timer_new expects hz > 0\".to_string()); } Value::Str(format!(\"timer:{}:hz={}\", name, hz)) },\n");
+    out.push_str("    \"timer_start\" => { let timer = builtin_str_arg(args, 0)?; let cycles = builtin_int_arg(args, 1)?; ensure_handle_prefix(timer, \"timer:\", \"timer_start\")?; if cycles <= 0 { return Err(\"timer_start expects cycles > 0\".to_string()); } Value::Str(format!(\"{}:cycles={}\", timer, cycles)) },\n");
+    out.push_str("    \"timer_elapsed\" => { let timer = builtin_str_arg(args, 0)?; ensure_handle_prefix(timer, \"timer:\", \"timer_elapsed\")?; let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| \"system time is before UNIX_EPOCH\".to_string())?; Value::Int((now.as_micros() % 1_000_000) as i64) },\n");
+    out.push_str("    \"watchdog_new\" => { let name = builtin_str_arg(args, 0)?; let timeout_ms = builtin_int_arg(args, 1)?; if timeout_ms <= 0 { return Err(\"watchdog_new expects timeout_ms > 0\".to_string()); } Value::Str(format!(\"watchdog:{}:ms={}\", name, timeout_ms)) },\n");
+    out.push_str("    \"watchdog_feed\" => { let watchdog = builtin_str_arg(args, 0)?; ensure_handle_prefix(watchdog, \"watchdog:\", \"watchdog_feed\")?; Value::Bool(true) },\n");
+    out.push_str("    \"dma_new\" => { let channel = builtin_str_arg(args, 0)?; Value::Str(format!(\"dma:{}\", channel)) },\n");
+    out.push_str("    \"dma_transfer\" => { let dma = builtin_str_arg(args, 0)?; let _src = builtin_str_arg(args, 1)?; let _dst = builtin_str_arg(args, 2)?; let bytes = builtin_int_arg(args, 3)?; ensure_handle_prefix(dma, \"dma:\", \"dma_transfer\")?; if bytes < 0 { return Err(\"dma_transfer expects non-negative byte count\".to_string()); } Value::Bool(true) },\n");
     out.push_str("    \"window_loop\" => { let title = builtin_str_arg(args, 0)?; let ticks = builtin_int_arg(args, 1)?; if ticks < 0 { return Err(\"window_loop expects non-negative tick count\".to_string()); } Value::Str(format!(\"window:{}:ticks={}\", title, ticks)) },\n");
     out.push_str("    \"menu\" => { let _title = builtin_str_arg(args, 0)?; let options = builtin_str_arg(args, 1)?; let first = options.split('|').next().map(|s| s.trim().to_string()).unwrap_or_default(); if first.is_empty() { Value::Maybe } else { Value::Str(first) } },\n");
     out.push_str("    \"http_get\" => { let url = builtin_str_arg(args, 0)?; let escaped = escape_json_string(url); Value::Str(format!(\"{{\\\"status\\\":200,\\\"url\\\":\\\"{}\\\",\\\"body\\\":\\\"stub\\\"}}\", escaped)) },\n");
@@ -559,3 +582,8 @@ fn instruction_to_rust(ins: &Instruction) -> String {
         Instruction::Return => "Instruction::Return".to_string(),
     }
 }
+
+
+
+
+

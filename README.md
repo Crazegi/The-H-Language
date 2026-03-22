@@ -54,6 +54,14 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - string: `len`, `upper`, `lower`, `contains`, `split`, `join`
   - logic: `phase`, `collapse`
   - hardware: `sleep_until(interrupt)`
+  - embedded/hardware scaffold:
+    - gpio: `gpio_claim`, `gpio_mode`, `gpio_write`, `gpio_read`
+    - uart: `uart_new`, `uart_write`, `uart_read`
+    - spi: `spi_new`, `spi_transfer`
+    - i2c: `i2c_new`, `i2c_write`, `i2c_read`
+    - timer: `timer_new`, `timer_start`, `timer_elapsed`
+    - watchdog: `watchdog_new`, `watchdog_feed`
+    - dma: `dma_new`, `dma_transfer`
   - desktop:
     - input: `input(prompt)`
     - file I/O: `read_text`, `write_text`, `append_text`, `exists`, `delete_file`

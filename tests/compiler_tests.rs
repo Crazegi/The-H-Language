@@ -248,6 +248,48 @@ fn vm_executes_core_stdlib_math_collections_string_convert() {
 }
 
 #[test]
+fn vm_executes_embedded_hardware_library_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own pin = gpio_claim("[port_a]")
+    own pin_cfg = gpio_mode(pin, "out")
+    own wrote = gpio_write(pin, 1)
+    own pin_state = gpio_read(pin)
+
+    own uart = uart_new("uart0", 115200)
+    own sent = uart_write(uart, "PING")
+    own recv = uart_read(uart)
+
+    own spi = spi_new("spi0", 1000000, 0)
+    own echo = spi_transfer(spi, "AB")
+
+    own i2c = i2c_new("i2c0", 400000)
+    own i2c_ok = i2c_write(i2c, 0x40, "AA")
+    own i2c_bytes = i2c_read(i2c, 0x40, 2)
+
+    own timer = timer_new("t0", 1000)
+    own timer_arm = timer_start(timer, 64)
+    own elapsed = timer_elapsed(timer)
+
+    own wd = watchdog_new("wd0", 250)
+    own fed = watchdog_feed(wd)
+
+    own dma = dma_new("ch0")
+    own copied = dma_transfer(dma, "src", "dst", 128)
+
+    if contains(pin_cfg, "mode=out") and wrote and (pin_state == 0 or pin_state == 1) and sent == 4 and recv == "uart_rx_stub" and echo == "AB" and i2c_ok and i2c_bytes == "40 40" and contains(timer_arm, "cycles=64") and elapsed >= 0 and fed and copied:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():

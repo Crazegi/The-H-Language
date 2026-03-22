@@ -178,6 +178,43 @@ fn parses_and_runs_core_stdlib_math_collections_string_convert() {
 }
 
 #[test]
+fn parses_and_runs_embedded_hardware_library_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own pin = gpio_claim("[port_a]")
+    own pin_cfg = gpio_mode(pin, "out")
+    own pin_ok = gpio_write(pin, 1)
+
+    own uart = uart_new("uart1", 9600)
+    own sent = uart_write(uart, "HI")
+
+    own spi = spi_new("spi1", 2000000, 1)
+    own echo = spi_transfer(spi, "55")
+
+    own i2c = i2c_new("i2c1", 100000)
+    own readback = i2c_read(i2c, 0x20, 3)
+
+    own timer = timer_new("t1", 1000)
+    own started = timer_start(timer, 16)
+
+    own wd = watchdog_new("wd1", 100)
+    own fed = watchdog_feed(wd)
+
+    own dma = dma_new("ch1")
+    own moved = dma_transfer(dma, "s", "d", 8)
+
+    if contains(pin_cfg, "mode=out") and pin_ok and sent == 2 and echo == "55" and readback == "20 20 20" and contains(started, "cycles=16") and fed and moved:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn rejects_invalid_cycle_contract_policy() {
     let src = r#"section .text:
   fn main():
