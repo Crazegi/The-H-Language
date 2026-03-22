@@ -7,8 +7,23 @@ pub struct Program {
     pub data: BTreeMap<String, Expr>,
     pub imports: Vec<String>,
     pub import_spans: Vec<Span>,
+    pub structs: Vec<StructDecl>,
     pub functions: Vec<Function>,
     pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructDecl {
+    pub name: String,
+    pub span: Span,
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub ty: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +159,11 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    FieldAccess {
+        base: Box<Expr>,
+        field: String,
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -179,7 +199,8 @@ impl Expr {
             | Expr::Var(_, span)
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
-            | Expr::Call { span, .. } => *span,
+            | Expr::Call { span, .. }
+            | Expr::FieldAccess { span, .. } => *span,
         }
     }
 }

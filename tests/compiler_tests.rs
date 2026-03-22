@@ -374,6 +374,30 @@ fn vm_executes_extended_scripting_and_string_builtins() {
 }
 
 #[test]
+fn vm_executes_struct_construction_and_field_access() {
+    let src = r#"section .text:
+  struct SensorReading:
+    value: int
+    timestamp: int
+    status: string
+
+  fn main():
+    own reading = SensorReading(42, now_ms(), "ok")
+    own v = reading.value
+    own s = reading.status
+    if v == 42 and s == "ok":
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn vm_executes_core_stdlib_math_collections_string_convert() {
     let src = r#"section .text:
   fn main():

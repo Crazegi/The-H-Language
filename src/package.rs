@@ -183,6 +183,11 @@ fn write_value(out: &mut Vec<u8>, v: &Value) -> Result<(), PackageError> {
         Value::Maybe => {
             write_u8(out, 4);
         }
+        Value::Struct(_, _) => {
+            return Err(PackageError::new(
+                "Struct runtime values are not serializable in package format",
+            ));
+        }
         Value::Ref(name) => {
             write_u8(out, 5);
             write_string(out, name);

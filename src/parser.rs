@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{
-    BinaryOp, ContractPolicy, CycleContract, Expr, Function, Instruction, Program, Stmt, UnaryOp,
+    BinaryOp, ContractPolicy, CycleContract, Expr, Function, Instruction, Program, StructDecl,
+    StructField, Stmt, UnaryOp,
 };
 use crate::error::LexerError;
 use crate::lexer::Lexer;
@@ -66,6 +67,7 @@ impl Parser {
         let mut data = BTreeMap::new();
         let mut imports = Vec::new();
         let mut import_spans = Vec::new();
+        let mut structs = Vec::new();
         let mut functions = Vec::new();
 
         self.skip_newlines();
@@ -101,6 +103,8 @@ impl Parser {
                             let (module, span) = self.parse_import_stmt()?;
                             imports.push(module);
                             import_spans.push(span);
+                        } else if self.match_kind(TokenKind::KeywordStruct) {
+                            structs.push(self.parse_struct_decl()?);
                         } else {
                             functions.push(self.parse_function()?);
                         }
@@ -122,9 +126,51 @@ impl Parser {
             data,
             imports,
             import_spans,
+            structs,
             functions,
             source: self.source.clone(),
         })
+    }
+
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, ParseError> {
+        let span = self.previous().span;
+        let name = self.expect_identifier_like("Expected struct name")?.lexeme;
+        self.expect(TokenKind::Colon, "Expected `:` after struct name")?;
+        self.expect(TokenKind::Newline, "Expected newline after struct declaration")?;
+        self.expect(TokenKind::Indent, "Expected indented struct field block")?;
+
+        let mut fields = Vec::new();
+        while !self.check(TokenKind::Dedent) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(TokenKind::Dedent) {
+                break;
+            }
+
+            let field_name = self.expect_identifier_like("Expected struct field name")?.lexeme;
+            let field_span = self.previous().span;
+            self.expect(TokenKind::Colon, "Expected `:` after struct field name")?;
+            let ty_tok = self.advance().clone();
+            let ty = match ty_tok.kind {
+                TokenKind::KeywordInt | TokenKind::KeywordString | TokenKind::KeywordBool => {
+                    ty_tok.lexeme
+                }
+                _ => {
+                    return Err(ParseError::new(
+                        &ty_tok,
+                        "Expected field type (`int`, `string`, or `bool`)",
+                    ))
+                }
+            };
+            self.consume_newline_if_present();
+            fields.push(StructField {
+                name: field_name,
+                ty,
+                span: field_span,
+            });
+        }
+
+        self.expect(TokenKind::Dedent, "Expected end of struct field block")?;
+        Ok(StructDecl { name, span, fields })
     }
 
     fn parse_import_stmt(&mut self) -> Result<(String, crate::token::Span), ParseError> {
@@ -774,13 +820,18 @@ impl Parser {
                         args,
                         span: tok.span,
                     })
-                } else if name.contains('.') {
-                    Err(ParseError::new(
-                        self.peek(),
-                        "Qualified names must be used as function calls",
-                    ))
                 } else {
-                    Ok(Expr::Var(name, tok.span))
+                    let mut segments = name.split('.');
+                    let base = segments.next().unwrap_or_default().to_string();
+                    let mut expr = Expr::Var(base, tok.span);
+                    for field in segments {
+                        expr = Expr::FieldAccess {
+                            base: Box::new(expr),
+                            field: field.to_string(),
+                            span: tok.span,
+                        };
+                    }
+                    Ok(expr)
                 }
             }
             TokenKind::LParen => {
@@ -1042,6 +1093,7 @@ fn parse_source_from_path_inner(
             data: BTreeMap::new(),
             imports: Vec::new(),
             import_spans: Vec::new(),
+            structs: Vec::new(),
             functions: Vec::new(),
             source: String::new(),
         });
@@ -1061,6 +1113,7 @@ fn parse_source_from_path_inner(
         data: BTreeMap::new(),
         imports: Vec::new(),
         import_spans: Vec::new(),
+        structs: Vec::new(),
         functions: Vec::new(),
         source: local.source.clone(),
     };
@@ -1091,6 +1144,7 @@ fn parse_source_from_path_inner(
         data: BTreeMap::new(),
         imports: Vec::new(),
         import_spans: Vec::new(),
+        structs: Vec::new(),
         functions: Vec::new(),
         source: String::new(),
     }))?;
@@ -1127,6 +1181,20 @@ fn merge_programs(target: &mut Program, mut incoming: Program) -> Result<(), Par
             });
         }
         target.functions.push(function);
+    }
+
+    for struct_decl in incoming.structs {
+        if target.structs.iter().any(|s| s.name == struct_decl.name) {
+            return Err(ParseError {
+                line: struct_decl.span.line,
+                column: struct_decl.span.column,
+                message: format!(
+                    "Duplicate struct `{}` across imported modules",
+                    struct_decl.name
+                ),
+            });
+        }
+        target.structs.push(struct_decl);
     }
 
     Ok(())

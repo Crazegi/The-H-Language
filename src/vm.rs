@@ -427,6 +427,14 @@ fn equals(left: &Value, right: &Value) -> bool {
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Maybe, Value::Maybe) => true,
+        (Value::Struct(name_a, fields_a), Value::Struct(name_b, fields_b)) => {
+            if name_a != name_b || fields_a.len() != fields_b.len() {
+                return false;
+            }
+            fields_a
+                .iter()
+                .all(|(k, v)| fields_b.get(k).is_some_and(|rhs| equals(v, rhs)))
+        }
         (Value::Unit, Value::Unit) => true,
         _ => false,
     }

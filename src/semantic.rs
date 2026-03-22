@@ -150,6 +150,47 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
         }
     }
 
+    let mut struct_fields: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for decl in &program.structs {
+        if signatures.contains_key(&decl.name) {
+            return Err(SemanticError::at(
+                decl.span,
+                source,
+                format!("`{}` cannot be both struct and function", decl.name),
+            ));
+        }
+        if struct_fields.contains_key(&decl.name) {
+            return Err(SemanticError::at(
+                decl.span,
+                source,
+                format!("Duplicate struct `{}`", decl.name),
+            ));
+        }
+        if decl.fields.is_empty() {
+            return Err(SemanticError::at(
+                decl.span,
+                source,
+                format!("Struct `{}` must define at least one field", decl.name),
+            ));
+        }
+
+        let mut field_map = HashMap::new();
+        for field in &decl.fields {
+            if field_map.contains_key(&field.name) {
+                return Err(SemanticError::at(
+                    field.span,
+                    source,
+                    format!(
+                        "Duplicate field `{}` in struct `{}`",
+                        field.name, decl.name
+                    ),
+                ));
+            }
+            field_map.insert(field.name.clone(), field.ty.clone());
+        }
+        struct_fields.insert(decl.name.clone(), field_map);
+    }
+
     if !signatures.contains_key("main") && program.functions.is_empty() {
         return Err(SemanticError::new(
             "Program must define at least one function (prefer `main`)",
@@ -207,6 +248,7 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
         let mut refs: HashSet<String> = HashSet::new();
         let mut declared_symbols: HashMap<String, Span> = HashMap::new();
         let mut suppress_unused_symbols: HashSet<String> = HashSet::new();
+        let mut symbol_struct_types: HashMap<String, String> = HashMap::new();
         for p in &f.params {
             declared_symbols.insert(p.clone(), f.span);
         }
@@ -236,8 +278,10 @@ pub fn analyze_with_warnings(program: &Program) -> Result<Vec<SemanticWarning>, 
                 &program.data,
                 &signatures,
                 &imported_modules,
+                &struct_fields,
                 &mut declared_symbols,
                 &mut suppress_unused_symbols,
+                &mut symbol_struct_types,
                 &mut used_symbols,
                 source,
             )?;
@@ -292,8 +336,10 @@ fn analyze_stmt(
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
     imported_modules: &HashSet<String>,
+    struct_fields: &HashMap<String, HashMap<String, String>>,
     declared_symbols: &mut HashMap<String, Span>,
     suppress_unused_symbols: &mut HashSet<String>,
+    symbol_struct_types: &mut HashMap<String, String>,
     used_symbols: &mut HashSet<String>,
     source: &str,
 ) -> Result<(), SemanticError> {
@@ -325,12 +371,19 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
             symbols.insert(name.clone());
             refs.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            if let Some(struct_name) = infer_struct_type(expr, symbol_struct_types, struct_fields) {
+                symbol_struct_types.insert(name.clone(), struct_name);
+            } else {
+                symbol_struct_types.remove(name);
+            }
             if *suppress_unused_warning {
                 suppress_unused_symbols.insert(name.clone());
             }
@@ -354,11 +407,18 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
             symbols.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            if let Some(struct_name) = infer_struct_type(expr, symbol_struct_types, struct_fields) {
+                symbol_struct_types.insert(name.clone(), struct_name);
+            } else {
+                symbol_struct_types.remove(name);
+            }
             if *suppress_unused_warning {
                 suppress_unused_symbols.insert(name.clone());
             }
@@ -398,6 +458,7 @@ fn analyze_stmt(
             symbols.insert(name.clone());
             refs.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            symbol_struct_types.remove(name);
             if *suppress_unused_warning {
                 suppress_unused_symbols.insert(name.clone());
             }
@@ -486,8 +547,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -514,9 +577,16 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
+            if let Some(struct_name) = infer_struct_type(expr, symbol_struct_types, struct_fields) {
+                symbol_struct_types.insert(name.clone(), struct_name);
+            } else {
+                symbol_struct_types.remove(name);
+            }
         }
         Stmt::Instruction {
             op,
@@ -558,6 +628,8 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -574,6 +646,8 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -591,8 +665,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -611,8 +687,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -627,6 +705,8 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -644,8 +724,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -658,6 +740,8 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -675,8 +759,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -701,11 +787,14 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
             symbols.insert(name.clone());
             declared_symbols.insert(name.clone(), stmt_span);
+            symbol_struct_types.remove(name);
             for s in body {
                 analyze_stmt(
                     s,
@@ -720,8 +809,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -756,8 +847,10 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
                     declared_symbols,
                     suppress_unused_symbols,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -771,6 +864,8 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -784,6 +879,8 @@ fn analyze_stmt(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
@@ -796,6 +893,8 @@ fn analyze_stmt(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?
@@ -810,6 +909,8 @@ fn analyze_expr(
     data: &std::collections::BTreeMap<String, Expr>,
     signatures: &HashMap<String, usize>,
     imported_modules: &HashSet<String>,
+    struct_fields: &HashMap<String, HashMap<String, String>>,
+    symbol_struct_types: &HashMap<String, String>,
     used_symbols: &mut HashSet<String>,
     source: &str,
 ) -> Result<(), SemanticError> {
@@ -836,6 +937,8 @@ fn analyze_expr(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )
@@ -849,6 +952,8 @@ fn analyze_expr(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -858,6 +963,8 @@ fn analyze_expr(
                 data,
                 signatures,
                 imported_modules,
+                struct_fields,
+                symbol_struct_types,
                 used_symbols,
                 source,
             )?;
@@ -886,6 +993,8 @@ fn analyze_expr(
             let mut normalized_builtin_name: Option<String> = None;
             let expected = if let Some(v) = signatures.get(name) {
                 *v
+            } else if let Some(fields) = struct_fields.get(name) {
+                fields.len()
             } else if let Some(normalized) = normalize_builtin_name(name) {
                 normalized_builtin_name = Some(normalized.clone());
                 builtin_arity(&normalized).unwrap_or(usize::MAX)
@@ -936,12 +1045,75 @@ fn analyze_expr(
                     data,
                     signatures,
                     imported_modules,
+                    struct_fields,
+                    symbol_struct_types,
                     used_symbols,
                     source,
                 )?;
             }
             Ok(())
         }
+        Expr::FieldAccess { base, field, span } => {
+            analyze_expr(
+                base,
+                symbols,
+                data,
+                signatures,
+                imported_modules,
+                struct_fields,
+                symbol_struct_types,
+                used_symbols,
+                source,
+            )?;
+
+            let Some(struct_name) = infer_struct_type(base, symbol_struct_types, struct_fields) else {
+                return Err(SemanticError::at(
+                    *span,
+                    source,
+                    "Field access requires a struct value",
+                ));
+            };
+
+            let Some(fields) = struct_fields.get(&struct_name) else {
+                return Err(SemanticError::at(
+                    *span,
+                    source,
+                    format!("Unknown struct `{}`", struct_name),
+                ));
+            };
+
+            if !fields.contains_key(field) {
+                return Err(SemanticError::at(
+                    *span,
+                    source,
+                    format!("Struct `{}` has no field `{}`", struct_name, field),
+                ));
+            }
+
+            Ok(())
+        }
+    }
+}
+
+fn infer_struct_type(
+    expr: &Expr,
+    symbol_struct_types: &HashMap<String, String>,
+    struct_fields: &HashMap<String, HashMap<String, String>>,
+) -> Option<String> {
+    match expr {
+        Expr::Var(name, _) => symbol_struct_types.get(name).cloned(),
+        Expr::Call { name, .. } => struct_fields.get(name).map(|_| name.clone()),
+        Expr::FieldAccess { base, field, .. } => {
+            let struct_name = infer_struct_type(base, symbol_struct_types, struct_fields)?;
+            let fields = struct_fields.get(&struct_name)?;
+            let ty = fields.get(field)?;
+            if struct_fields.contains_key(ty) {
+                Some(ty.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

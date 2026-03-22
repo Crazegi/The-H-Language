@@ -188,7 +188,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("use std::time::{Duration, SystemTime, UNIX_EPOCH};\n\n");
 
     out.push_str("#[derive(Clone, Debug)]\n");
-    out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Maybe, Ref(String), Unit }\n\n");
+    out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Maybe, Struct(String, HashMap<String, Value>), Ref(String), Unit }\n\n");
 
     out.push_str("#[derive(Clone, Debug)]\n");
     out.push_str("enum Instruction {\n");
@@ -210,6 +210,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    Value::Str(s) => format!(\"\\\"{}\\\"\", s),\n");
     out.push_str("    Value::Bool(b) => b.to_string(),\n");
     out.push_str("    Value::Maybe => \"maybe\".to_string(),\n");
+    out.push_str("    Value::Struct(name, fields) => { let mut keys = fields.keys().cloned().collect::<Vec<_>>(); keys.sort(); let parts = keys.into_iter().map(|k| { let v = fields.get(&k).expect(\"field key exists\"); format!(\"{}={}\", k, render(v)) }).collect::<Vec<_>>().join(\", \" ); format!(\"{}{{{}}}\", name, parts) },\n");
     out.push_str("    Value::Ref(name) => format!(\"&{}\", name),\n");
     out.push_str("    Value::Unit => \"unit\".to_string(),\n");
     out.push_str("  }\n}\n\n");
@@ -248,7 +249,7 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("}\n\n");
 
     out.push_str("fn builtin_value_to_string(v: &Value) -> String {\n");
-    out.push_str("  match v { Value::Int(n) => n.to_string(), Value::Str(s) => s.clone(), Value::Bool(b) => b.to_string(), Value::Maybe => \"maybe\".to_string(), Value::Ref(name) => format!(\"&{}\", name), Value::Unit => \"unit\".to_string() }\n");
+    out.push_str("  match v { Value::Int(n) => n.to_string(), Value::Str(s) => s.clone(), Value::Bool(b) => b.to_string(), Value::Maybe => \"maybe\".to_string(), Value::Struct(name, fields) => { let mut keys = fields.keys().cloned().collect::<Vec<_>>(); keys.sort(); let parts = keys.into_iter().map(|k| { let v = fields.get(&k).expect(\"field key exists\"); format!(\"{}={}\", k, builtin_value_to_string(v)) }).collect::<Vec<_>>().join(\", \" ); format!(\"{}{{{}}}\", name, parts) }, Value::Ref(name) => format!(\"&{}\", name), Value::Unit => \"unit\".to_string() }\n");
     out.push_str("}\n\n");
 
     out.push_str("fn escape_json_string(input: &str) -> String { input.replace('\\\\', \"\\\\\\\\\").replace('\\\"', \"\\\\\\\"\") }\n\n");
@@ -441,6 +442,8 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"script_env_set\" => { let key = builtin_str_arg(args, 0)?; let value = builtin_str_arg(args, 1)?; unsafe { std::env::set_var(key, value); } Value::Bool(true) },\n");
     out.push_str("    \"script_exit\" => { let code = builtin_int_arg(args, 0)?; if !(i32::MIN as i64..=i32::MAX as i64).contains(&code) { return Err(\"script_exit code out of i32 range\".to_string()); } std::process::exit(code as i32) },\n");
     out.push_str("    \"script_pipe\" => { let left = builtin_str_arg(args, 0)?; let right = builtin_str_arg(args, 1)?; let command = format!(\"{} | {}\", left, right); let status = shell_command(&command).status().map_err(|e| format!(\"script_pipe failed for `{}`: {}\", command, e))?; Value::Int(status.code().unwrap_or(-1) as i64) },\n");
+    out.push_str("    \"__struct_new\" => { let struct_name = builtin_str_arg(args, 0)?; if args.is_empty() || (args.len() - 1) % 2 != 0 { return Err(\"__struct_new expects name + field/value pairs\".to_string()); } let pair_count = (args.len() - 1) / 2; let mut fields = HashMap::new(); for i in 0..pair_count { let field_name = match &args[1 + i] { Value::Str(v) => v.clone(), _ => return Err(\"__struct_new field names must be strings\".to_string()) }; fields.insert(field_name, args[1 + pair_count + i].clone()); } Value::Struct(struct_name.to_string(), fields) },\n");
+    out.push_str("    \"__struct_get\" => { let field = builtin_str_arg(args, 1)?; match args.get(0) { Some(Value::Struct(_, fields)) => fields.get(field).cloned().ok_or_else(|| format!(\"Struct has no field `{}`\", field))?, _ => return Err(\"__struct_get expects struct value\".to_string()) } },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");
@@ -596,6 +599,9 @@ fn value_to_rust(value: &Value) -> String {
         Value::Str(v) => format!("Value::Str({:?}.to_string())", v),
         Value::Bool(v) => format!("Value::Bool({})", v),
         Value::Maybe => "Value::Maybe".to_string(),
+        Value::Struct(_, _) => {
+            panic!("Struct values are not supported in data-section native literals")
+        }
         Value::Ref(v) => format!("Value::Ref({:?}.to_string())", v),
         Value::Unit => "Value::Unit".to_string(),
     }

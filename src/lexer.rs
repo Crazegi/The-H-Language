@@ -312,6 +312,7 @@ impl Lexer {
             "section" => TokenKind::KeywordSection,
             "fn" => TokenKind::KeywordFn,
             "import" | "textimport" => TokenKind::KeywordImport,
+            "struct" | "textstruct" => TokenKind::KeywordStruct,
             "interrupt" => TokenKind::KeywordInterrupt,
             "own" => TokenKind::KeywordOwn,
             "ref" => TokenKind::KeywordRef,

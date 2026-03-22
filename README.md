@@ -39,6 +39,7 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Sections: `section .data:` and `section .text:`
 - Stdlib imports: `import math`, `import gpio`, etc. (inside `section .text:`)
 - Functions: `fn name(a, b):` with indentation-based blocks
+- Structs: `struct Name:` with typed fields and constructor calls
 - Ownership/borrowing: `own` and `ref`
 - Hardware port ownership: `own [port_a]`, `ref [port_a]`, and `ref alias = &[port_a]`
 - Interrupt handlers: `interrupt fn handler():`
@@ -82,6 +83,28 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - namespaced call style is supported with imports, e.g. `math.atan2(y, x)`, `gpio.claim("[port_a]")`
 - Control flow: `if/else`, `while`, `repeat`, `for`, `return`
 - Structured output: YAML-style `print:` blocks
+
+### Structs
+
+H supports lightweight typed struct declarations in `section .text:`.
+
+```text
+section .text:
+  struct SensorReading:
+    value: int
+    timestamp: int
+    status: string
+
+  fn main():
+    own reading = SensorReading(42, now_ms(), "ok")
+    own v = reading.value
+    return v
+```
+
+Current struct MVP supports:
+- declaration with field types (`int`, `string`, `bool`)
+- constructor call by struct name
+- field reads via dot access (`instance.field`)
 
 ### Stdlib Namespaces (Import System)
 

@@ -10,6 +10,7 @@ pub enum Value {
     Str(String),
     Bool(bool),
     Maybe,
+    Struct(String, HashMap<String, Value>),
     Ref(String),
     Unit,
 }
@@ -44,6 +45,7 @@ struct Frame {
 pub struct Runtime {
     globals: BTreeMap<String, Value>,
     functions: HashMap<String, crate::ast::Function>,
+    structs: HashMap<String, Vec<String>>,
 }
 
 impl Runtime {
@@ -59,7 +61,20 @@ impl Runtime {
             functions.insert(f.name.clone(), f.clone());
         }
 
-        Ok(Self { globals, functions })
+        let mut structs = HashMap::new();
+        for decl in &program.structs {
+            let mut fields = Vec::with_capacity(decl.fields.len());
+            for field in &decl.fields {
+                fields.push(field.name.clone());
+            }
+            structs.insert(decl.name.clone(), fields);
+        }
+
+        Ok(Self {
+            globals,
+            functions,
+            structs,
+        })
     }
 
     pub fn run(&self) -> Result<Value, RuntimeError> {
@@ -78,6 +93,22 @@ impl Runtime {
     fn call_function(&self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         if let Some(v) = call_builtin(name, &args)? {
             return Ok(v);
+        }
+
+        if let Some(fields) = self.structs.get(name) {
+            if fields.len() != args.len() {
+                return Err(RuntimeError::new(format!(
+                    "Struct `{}` expects {} args, got {}",
+                    name,
+                    fields.len(),
+                    args.len()
+                )));
+            }
+            let mut values = HashMap::new();
+            for (field, arg) in fields.iter().zip(args.into_iter()) {
+                values.insert(field.clone(), arg);
+            }
+            return Ok(Value::Struct(name.to_string(), values));
         }
 
         let function = self
@@ -349,6 +380,15 @@ impl Runtime {
                 }
                 self.call_function(name, evaluated)
             }
+            Expr::FieldAccess { base, field, .. } => {
+                let base_value = self.eval_expr(base, frame)?;
+                match base_value {
+                    Value::Struct(_, fields) => fields.get(field).cloned().ok_or_else(|| {
+                        RuntimeError::new(format!("Struct has no field `{}`", field))
+                    }),
+                    _ => Err(RuntimeError::new("Field access requires struct value")),
+                }
+            }
         }
     }
 
@@ -549,6 +589,14 @@ fn equals(left: &Value, right: &Value) -> bool {
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Maybe, Value::Maybe) => true,
+        (Value::Struct(name_a, fields_a), Value::Struct(name_b, fields_b)) => {
+            if name_a != name_b || fields_a.len() != fields_b.len() {
+                return false;
+            }
+            fields_a
+                .iter()
+                .all(|(k, v)| fields_b.get(k).is_some_and(|rhs| equals(v, rhs)))
+        }
         (Value::Unit, Value::Unit) => true,
         _ => false,
     }
@@ -587,6 +635,19 @@ impl Value {
             Value::Str(v) => format!("\"{}\"", v),
             Value::Bool(v) => v.to_string(),
             Value::Maybe => "maybe".to_string(),
+            Value::Struct(name, fields) => {
+                let mut keys = fields.keys().cloned().collect::<Vec<_>>();
+                keys.sort();
+                let parts = keys
+                    .into_iter()
+                    .map(|k| {
+                        let v = fields.get(&k).expect("field key exists");
+                        format!("{}={}", k, v.render())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}{{{}}}", name, parts)
+            }
             Value::Ref(v) => format!("&{}", v),
             Value::Unit => "unit".to_string(),
         }

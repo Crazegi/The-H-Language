@@ -742,8 +742,21 @@ pub fn compile_program_with_options(
 
     let mut functions = HashMap::new();
     let mut reports = Vec::new();
+    let mut struct_fields = HashMap::new();
+    for decl in &program.structs {
+        let mut fields = Vec::with_capacity(decl.fields.len());
+        for f in &decl.fields {
+            fields.push(f.name.clone());
+        }
+        struct_fields.insert(decl.name.clone(), fields);
+    }
     for f in &program.functions {
-        let mut ctx = FunctionCompiler::new(f.name.clone(), options.clone(), program.source.clone());
+        let mut ctx = FunctionCompiler::new(
+            f.name.clone(),
+            options.clone(),
+            program.source.clone(),
+            struct_fields.clone(),
+        );
         for stmt in &f.body {
             ctx.compile_stmt(stmt)?;
         }
@@ -971,7 +984,7 @@ fn collect_expr_cycle_keys(expr: &Expr, keys: &mut std::collections::BTreeSet<St
             keys.insert(key.to_string());
             keys.insert(format!("energy.{}", key));
         }
-        Expr::Call { .. } => {
+        Expr::Call { .. } | Expr::FieldAccess { .. } => {
             // Calls are currently rejected in execute blocks, but we still record
             // this baseline expression category for profile completeness diagnostics.
             keys.insert("expr.atom".to_string());
@@ -986,13 +999,19 @@ struct FunctionCompiler {
     options: CompileOptions,
     active_cycle_profile: CycleCostProfile,
     code: Vec<Instruction>,
+    struct_fields: HashMap<String, Vec<String>>,
     temp_counter: usize,
     contract_counter: usize,
     contract_reports: Vec<ContractCompileReport>,
 }
 
 impl FunctionCompiler {
-    fn new(function_name: String, options: CompileOptions, source: String) -> Self {
+    fn new(
+        function_name: String,
+        options: CompileOptions,
+        source: String,
+        struct_fields: HashMap<String, Vec<String>>,
+    ) -> Self {
         let active_cycle_profile = options
             .cycle_profile_override
             .clone()
@@ -1004,6 +1023,7 @@ impl FunctionCompiler {
             options,
             active_cycle_profile,
             code: Vec::new(),
+            struct_fields,
             temp_counter: 0,
             contract_counter: 0,
             contract_reports: Vec::new(),
@@ -1282,12 +1302,32 @@ impl FunctionCompiler {
                 });
             }
             Expr::Call { name, args, .. } => {
-                for arg in args {
-                    self.compile_expr(arg)?;
+                if let Some(fields) = self.struct_fields.get(name).cloned() {
+                    self.code.push(Instruction::PushStr(name.clone()));
+                    for field in &fields {
+                        self.code.push(Instruction::PushStr(field.clone()));
+                    }
+                    for arg in args {
+                        self.compile_expr(arg)?;
+                    }
+                    self.code.push(Instruction::Call(
+                        "__struct_new".to_string(),
+                        args.len() + fields.len() + 1,
+                    ));
+                } else {
+                    for arg in args {
+                        self.compile_expr(arg)?;
+                    }
+                    let lowered_name = normalize_builtin_name(name).unwrap_or_else(|| name.clone());
+                    self.code
+                        .push(Instruction::Call(lowered_name, args.len()));
                 }
-                let lowered_name = normalize_builtin_name(name).unwrap_or_else(|| name.clone());
+            }
+            Expr::FieldAccess { base, field, .. } => {
+                self.compile_expr(base)?;
+                self.code.push(Instruction::PushStr(field.clone()));
                 self.code
-                    .push(Instruction::Call(lowered_name, args.len()));
+                    .push(Instruction::Call("__struct_get".to_string(), 2));
             }
         }
         Ok(())
@@ -1750,7 +1790,7 @@ fn expr_cycle_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Compi
                 .and_then(|v| v.checked_add(op_cost))
                 .ok_or_else(|| CompileError::new("Cycle count overflow in expression"))
         }
-        Expr::Call { .. } => Err(CompileError::new(
+        Expr::Call { .. } | Expr::FieldAccess { .. } => Err(CompileError::new(
             "Cycle contract execute block does not allow function calls",
         )),
     }
@@ -1784,7 +1824,7 @@ fn expr_energy_cost(expr: &Expr, profile: &CycleCostProfile) -> Result<u64, Comp
                 .and_then(|v| v.checked_add(op_cost))
                 .ok_or_else(|| CompileError::new("Energy count overflow in expression"))
         }
-        Expr::Call { .. } => Err(CompileError::new(
+        Expr::Call { .. } | Expr::FieldAccess { .. } => Err(CompileError::new(
             "Cycle contract execute block does not allow function calls",
         )),
     }
@@ -1838,7 +1878,7 @@ fn fold_expr(expr: &Expr, fast_math: bool) -> Result<Option<FoldValue>, CompileE
         Expr::String(v, _) => Ok(Some(FoldValue::Str(v.clone()))),
         Expr::Bool(v, _) => Ok(Some(FoldValue::Bool(*v))),
         Expr::Maybe(_) => Ok(Some(FoldValue::Maybe)),
-        Expr::Var(..) | Expr::Call { .. } => Ok(None),
+        Expr::Var(..) | Expr::Call { .. } | Expr::FieldAccess { .. } => Ok(None),
         Expr::Unary { op, rhs, .. } => {
             let Some(rhs) = fold_expr(rhs, fast_math)? else {
                 return Ok(None);
@@ -1948,7 +1988,7 @@ fn eval_execute_const_expr(
         Expr::Bool(v, _) => Ok(Some(FoldValue::Bool(*v))),
         Expr::Maybe(_) => Ok(Some(FoldValue::Maybe)),
         Expr::Var(name, _) => Ok(const_env.get(name).cloned()),
-        Expr::Call { .. } => Ok(None),
+        Expr::Call { .. } | Expr::FieldAccess { .. } => Ok(None),
         Expr::Unary { op, rhs, .. } => {
             let Some(rhs) = eval_execute_const_expr(rhs, const_env, fast_math)? else {
                 return Ok(None);

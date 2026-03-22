@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::evaluator::Value;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -1077,6 +1078,32 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
                 .map_err(|e| format!("script_pipe failed for `{}`: {}", command, e))?;
             Value::Int(status.code().unwrap_or(-1) as i64)
         }
+        "__struct_new" => {
+            let struct_name = str_arg(args, 0)?;
+            if args.is_empty() || (args.len() - 1) % 2 != 0 {
+                return Err("__struct_new expects name + field/value pairs".to_string());
+            }
+            let pair_count = (args.len() - 1) / 2;
+            let mut fields = HashMap::new();
+            for i in 0..pair_count {
+                let field_name = match &args[1 + i] {
+                    Value::Str(v) => v.clone(),
+                    _ => return Err("__struct_new field names must be strings".to_string()),
+                };
+                fields.insert(field_name, args[1 + pair_count + i].clone());
+            }
+            Value::Struct(struct_name.to_string(), fields)
+        }
+        "__struct_get" => {
+            let field = str_arg(args, 1)?;
+            match args.get(0) {
+                Some(Value::Struct(_, fields)) => fields
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| format!("Struct has no field `{}`", field))?,
+                _ => return Err("__struct_get expects struct value".to_string()),
+            }
+        }
         _ => return Ok(None),
     };
 
@@ -1252,6 +1279,19 @@ fn value_to_string(value: &Value) -> String {
         Value::Str(v) => v.clone(),
         Value::Bool(v) => v.to_string(),
         Value::Maybe => "maybe".to_string(),
+        Value::Struct(name, fields) => {
+            let mut keys = fields.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            let parts = keys
+                .into_iter()
+                .map(|k| {
+                    let v = fields.get(&k).expect("field key exists");
+                    format!("{}={}", k, value_to_string(v))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}{{{}}}", name, parts)
+        }
         Value::Ref(v) => format!("&{}", v),
         Value::Unit => "unit".to_string(),
     }
