@@ -32,6 +32,11 @@ H is a small hybrid language for deterministic, low-level-friendly programs (har
 - Packaging (`.hbcp`) for distribution without native compile steps
 - VS Code language assets in `vscode-h-language/` (grammar/snippets)
 
+Recent maturity upgrades include:
+- Import system for stdlib modules (`import math`, `import gpio`, etc.)
+- Namespaced call syntax (`math.atan2(...)`, `gpio.write(...)`) with semantic validation
+- Repository tree hygiene policy with a dedicated `scratch/` area for temporary experiments
+
 Top-level files
 ---------------
 - [src/lexer.rs](src/lexer.rs) — lexical analysis and indentation/YAML handling
@@ -47,6 +52,12 @@ Top-level files
 - [src/main.rs](src/main.rs) — CLI entrypoint and flags
 - [examples/] — real-world examples including cycle contract showcase
 - [tests/] — test coverage for parser, compiler, VM, package, native
+- [scratch/] — local temporary scripts and one-off command tests (ignored by git)
+
+Repository hygiene notes:
+- Generated artifacts should not be committed at repository root.
+- Temporary development files belong under `scratch/`.
+- Build output belongs under `target/`.
 
 Design Principles and Rationale
 --------------------------------
@@ -79,8 +90,10 @@ Each section below explains purpose, key types/functions, behavior, and "why thi
 - Purpose: take the token stream and produce an AST (`Program`) with `data` and `text` sections.
 - High-level flow:
   - `parse_program()` orchestrates parsing of named sections (`.data`, `.text`).
+  - Supports `import <module>` statements in `section .text:`.
   - `parse_function()` parses `fn name(params):` and uses `parse_block` to gather statements.
   - Statements include typed declarations, `own`/`ref`, `if/else`, `while`, `repeat`, `contract`, `print:` blocks, assembly instruction statements, returns, and function calls.
+  - Supports qualified call names like `math.atan2(...)` and `gpio.write(...)`.
   - `parse_block()` only supports `:` followed by indentation-based block. Brace blocks were removed to avoid syntax ambiguity.
   - Expression parsing follows standard precedence: or/xor/and → equality → comparison → term → factor → unary → primary.
 - Important: parser produces useful `ParseError`s with line/column for diagnostics.
@@ -88,7 +101,7 @@ Each section below explains purpose, key types/functions, behavior, and "why thi
 
 **AST: `src/ast.rs`**
 - Core node types:
-  - `Program { data: BTreeMap<String, Expr>, functions: Vec<Function> }`
+  - `Program { data: BTreeMap<String, Expr>, imports: Vec<String>, functions: Vec<Function> }`
   - `Function { name, params, body }`
   - `Stmt` variants: `OwnDecl`, `RefDecl`, `If`, `While`, `Repeat`, `CycleContract` (contract spec + body), `PrintBlock`, `Instruction`, `Assign`, `Expr`, `Return`.
   - `Expr` variants for numbers, strings, bools, variables, calls, unary/binary ops, and `Maybe` tri-state.
@@ -97,6 +110,8 @@ Each section below explains purpose, key types/functions, behavior, and "why thi
 **Semantic Analyzer: `src/semantic.rs`**
 - Purpose: perform type checks, scope/binding validation, and additional constraints that the parser cannot encode.
 - Checks include:
+  - Valid import modules (unknown or duplicate imports are rejected)
+  - Namespaced call enforcement (`module.symbol(...)` requires matching `import module`)
   - Validity of `data` section values (must be literals)
   - Ensures `ref` bindings are used correctly (can't assign to a `ref`), and ownership rules for `own`
   - Contract constraints: `execute` allows only deterministic statement forms (`instruction`, `own/assign`, `if`, `repeat`), and requires compile-time-constant conditions/counts for `if`/`repeat`
@@ -106,6 +121,7 @@ Each section below explains purpose, key types/functions, behavior, and "why thi
 - Purpose: convert AST into `BytecodeProgram` (see `src/bytecode.rs`) and enforce cycle contracts at compile-time.
 - Key features:
   - Instruction selection: maps AST instructions and high-level constructs into bytecode instructions.
+  - Builtin normalization: namespaced calls are lowered to canonical builtin symbols for runtime parity (VM/native).
   - Constant folding and peephole optimizations per `opt_level` configuration.
   - Cycle accounting: when encountering a `CycleContract`, the compiler computes cycle costs for the `execute` body according to the selected `CycleProfile` and applies `on_underflow`/`on_overflow` policies:
     - `pad_nop` inserts `Nop` instructions to reach declared cycles when underflowing.
@@ -189,6 +205,15 @@ Common Workflows
 - `cargo run --bin hl-lex -- --vm file.hl` — run on VM
 - `cargo run --bin hl-lex -- --pack file.hl --out pkg.hbcp` — produce package
 - `cargo run --bin hl-lex -- --run-package pkg.hbcp` — run package directly
+
+Import/namespace workflow (recommended for new code):
+- Add imports near top of `section .text:` (`import math`, `import gpio`, etc.)
+- Prefer namespaced calls (`math.snap(...)`, `gpio.write(...)`) for readability and future package growth
+- Keep legacy flat calls only where compatibility with older snippets is needed
+
+Scratch workflow:
+- Put throwaway files and command experiments under `scratch/`
+- Keep repository root focused on source, tests, examples, and documentation
 
 Configuration and Optimization
 ------------------------------

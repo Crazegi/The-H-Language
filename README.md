@@ -80,6 +80,104 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
 
+### Stdlib Namespaces (Import System)
+
+H supports both legacy flat builtin names and cleaner module-style names.
+
+- Flat style (still valid): `gpio_write(pin, 1)`, `atan2(y, x)`
+- Namespaced style (recommended): `gpio.write(pin, 1)`, `math.atan2(y, x)`
+
+To use namespaced style, import modules inside `section .text:`:
+
+```text
+section .text:
+  import math
+  import gpio
+
+  fn main():
+    own pin = gpio.claim("[port_a]")
+    own _ = gpio.mode(pin, "out")
+    own ok = gpio.write(pin, 1)
+    own heading = math.atan2(1, 1)
+    if ok and heading >= 0:
+      return 1
+    return 0
+```
+
+Note:
+- If you call `module.symbol(...)`, that module must be imported first.
+- Unqualified flat calls remain supported for compatibility.
+
+### Import Resolution Rules (Deep Dive)
+
+When H sees a call expression, it resolves symbols in this order:
+
+1. User-defined function names in the current program.
+2. Builtin names (flat style), for compatibility.
+3. Namespaced builtin aliases (`module.symbol`) if:
+   - the module was imported, and
+   - the alias maps to a known builtin.
+
+This gives you a safe migration path:
+
+- old code keeps running (`atan2(y, x)`),
+- new code can be cleaner and more explicit (`math.atan2(y, x)`).
+
+If you use namespaced style without importing the module, semantic analysis fails early with a
+clear error.
+
+### Module Alias Map (Practical Examples)
+
+The namespace layer is an aliasing surface over builtin implementations.
+
+- `math.atan2(y, x)` -> `atan2(y, x)`
+- `math.round(x)` -> `round(x)`
+- `gpio.claim("[port_a]")` -> `gpio_claim("[port_a]")`
+- `gpio.write(pin, 1)` -> `gpio_write(pin, 1)`
+- `timer.start(t, cycles)` -> `timer_start(t, cycles)`
+- `watchdog.feed(wd)` -> `watchdog_feed(wd)`
+- `script.run("echo hi")` -> `script_run("echo hi")`
+
+Recommended style:
+
+- New examples/docs: prefer namespaced calls.
+- Existing scripts/samples: keep flat calls until you intentionally migrate.
+
+### Migration Pattern (Flat -> Namespaced)
+
+1. Add imports at the top of `section .text:`.
+2. Replace flat calls module by module.
+3. Keep tests green between each module migration.
+
+Example:
+
+```text
+section .text:
+  import math
+
+  fn main():
+    own angle = math.atan2(1, 1)
+    own aligned = math.snap(15, 8)
+    return aligned
+```
+
+## Project Layout
+
+High-level structure (kept intentionally compact):
+
+- `src/`: lexer, parser, semantic analysis, bytecode compiler, evaluator, VM, native backend.
+- `tests/`: parser/semantic/runtime/compiler integration tests.
+- `examples/`: runnable H samples.
+- `vscode-h-language/`: VS Code language support package.
+- `target/`: Cargo build output (generated).
+- root docs: `README.md`, `COMPLETE_DOCUMENTATION.md`, `COMPLETE_DOCUMENTATION_PL.md`.
+
+Tree hygiene policy:
+
+- generated native artifacts should not live in repo root,
+- root stays focused on source, tests, examples, and docs,
+- build artifacts belong in `target/` (or other ignored output folders).
+
 ## Desktop Starter API Scaffold
 
 H now includes a lightweight desktop-oriented scaffold API to reduce boilerplate when prototyping

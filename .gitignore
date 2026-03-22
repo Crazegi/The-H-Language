@@ -1,10 +1,12 @@
 target/
 out.hbc.txt
+*.hbc.txt
+*.exe
 *.pdb
 *.runtime.rs
 *.link.rs
 *.obj
-advanced.exe
+scratch/
 vscode-h-language/node_modules/
 vscode-h-language/*.vsix
 vscode-h-language/*.zip
