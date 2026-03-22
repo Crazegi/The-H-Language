@@ -12,10 +12,29 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "sqrt" => Some(1),
         "floor" => Some(1),
         "ceil" => Some(1),
+        "round" => Some(1),
+        "trunc" => Some(1),
+        "frac" => Some(1),
+        "snap" => Some(2),
         "log2" => Some(1),
+        "log10" => Some(1),
+        "ln" => Some(1),
+        "exp" => Some(1),
         "sin" => Some(1),
         "cos" => Some(1),
         "tan" => Some(1),
+        "asin" => Some(1),
+        "acos" => Some(1),
+        "atan" => Some(1),
+        "atan2" => Some(2),
+        "gcd" => Some(2),
+        "lcm" => Some(2),
+        "is_prime" => Some(1),
+        "next_pow2" => Some(1),
+        "popcount" => Some(1),
+        "leading_zeros" => Some(1),
+        "trailing_zeros" => Some(1),
+        "bit_reverse" => Some(1),
         "min" => Some(2),
         "max" => Some(2),
         "pow" => Some(2),
@@ -128,12 +147,50 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
         }
         "floor" => Value::Int(int_arg(args, 0)?),
         "ceil" => Value::Int(int_arg(args, 0)?),
+        "round" => {
+            let scaled = int_arg(args, 0)?;
+            Value::Int(scaled_to_f64(scaled).round() as i64)
+        }
+        "trunc" => {
+            let scaled = int_arg(args, 0)?;
+            Value::Int(scaled / 1000)
+        }
+        "frac" => {
+            let scaled = int_arg(args, 0)?;
+            Value::Int(scaled - (scaled / 1000) * 1000)
+        }
+        "snap" => {
+            let value = int_arg(args, 0)?;
+            let step = int_arg(args, 1)?;
+            if step == 0 {
+                return Err("snap expects non-zero step".to_string());
+            }
+            Value::Int(snap_to_step(value, step.abs()))
+        }
         "log2" => {
             let n = int_arg(args, 0)?;
             if n <= 0 {
                 return Err("log2 expects positive integer".to_string());
             }
             Value::Int((i64::BITS - 1 - n.leading_zeros()) as i64)
+        }
+        "log10" => {
+            let scaled = int_arg(args, 0)?;
+            if scaled <= 0 {
+                return Err("log10 expects positive fixed-point value".to_string());
+            }
+            f64_to_scaled(scaled_to_f64(scaled).log10(), "log10")?
+        }
+        "ln" => {
+            let scaled = int_arg(args, 0)?;
+            if scaled <= 0 {
+                return Err("ln expects positive fixed-point value".to_string());
+            }
+            f64_to_scaled(scaled_to_f64(scaled).ln(), "ln")?
+        }
+        "exp" => {
+            let scaled = int_arg(args, 0)?;
+            f64_to_scaled(scaled_to_f64(scaled).exp(), "exp")?
         }
         "sin" => {
             let deg = int_arg(args, 0)?;
@@ -150,6 +207,73 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
                 return Err("tan is undefined for this angle".to_string());
             }
             Value::Int((deg_to_rad(deg).tan() * 1000.0).round() as i64)
+        }
+        "asin" => {
+            let x = int_arg(args, 0)?;
+            if !(-1000..=1000).contains(&x) {
+                return Err("asin expects fixed-point input in range [-1000, 1000]".to_string());
+            }
+            Value::Int(rad_to_milli_degrees((scaled_to_f64(x)).asin()))
+        }
+        "acos" => {
+            let x = int_arg(args, 0)?;
+            if !(-1000..=1000).contains(&x) {
+                return Err("acos expects fixed-point input in range [-1000, 1000]".to_string());
+            }
+            Value::Int(rad_to_milli_degrees((scaled_to_f64(x)).acos()))
+        }
+        "atan" => {
+            let x = int_arg(args, 0)?;
+            Value::Int(rad_to_milli_degrees((scaled_to_f64(x)).atan()))
+        }
+        "atan2" => {
+            let y = int_arg(args, 0)?;
+            let x = int_arg(args, 1)?;
+            Value::Int(rad_to_milli_degrees((y as f64).atan2(x as f64)))
+        }
+        "gcd" => {
+            let a = int_arg(args, 0)?;
+            let b = int_arg(args, 1)?;
+            Value::Int(gcd_i64(a, b))
+        }
+        "lcm" => {
+            let a = int_arg(args, 0)?;
+            let b = int_arg(args, 1)?;
+            Value::Int(lcm_i64(a, b)?)
+        }
+        "is_prime" => {
+            let n = int_arg(args, 0)?;
+            Value::Bool(is_prime_i64(n))
+        }
+        "next_pow2" => {
+            let n = int_arg(args, 0)?;
+            if n <= 0 {
+                return Err("next_pow2 expects positive integer".to_string());
+            }
+            let n_u = n as u64;
+            let next = n_u
+                .checked_next_power_of_two()
+                .ok_or_else(|| "next_pow2 overflowed 64-bit range".to_string())?;
+            if next > i64::MAX as u64 {
+                return Err("next_pow2 result exceeds signed 64-bit range".to_string());
+            }
+            Value::Int(next as i64)
+        }
+        "popcount" => {
+            let n = int_arg(args, 0)?;
+            Value::Int((n as u64).count_ones() as i64)
+        }
+        "leading_zeros" => {
+            let n = int_arg(args, 0)?;
+            Value::Int((n as u64).leading_zeros() as i64)
+        }
+        "trailing_zeros" => {
+            let n = int_arg(args, 0)?;
+            Value::Int((n as u64).trailing_zeros() as i64)
+        }
+        "bit_reverse" => {
+            let n = int_arg(args, 0)?;
+            Value::Int(i64::from_ne_bytes((n as u64).reverse_bits().to_ne_bytes()))
         }
         "min" => Value::Int(int_arg(args, 0)?.min(int_arg(args, 1)?)),
         "max" => Value::Int(int_arg(args, 0)?.max(int_arg(args, 1)?)),
@@ -760,6 +884,75 @@ fn push_sequence_item(sequence: &str, item: &str) -> String {
 
 fn deg_to_rad(degrees: i64) -> f64 {
     (degrees as f64).to_radians()
+}
+
+fn scaled_to_f64(value: i64) -> f64 {
+    value as f64 / 1000.0
+}
+
+fn rad_to_milli_degrees(rad: f64) -> i64 {
+    (rad.to_degrees() * 1000.0).round() as i64
+}
+
+fn f64_to_scaled(value: f64, op: &str) -> Result<Value, String> {
+    let scaled = value * 1000.0;
+    if !scaled.is_finite() {
+        return Err(format!("{} failed: value is not finite", op));
+    }
+    if scaled < i64::MIN as f64 || scaled > i64::MAX as f64 {
+        return Err(format!("{} failed: value out of range", op));
+    }
+    Ok(Value::Int(scaled.round() as i64))
+}
+
+fn snap_to_step(value: i64, step: i64) -> i64 {
+    let lower = value.div_euclid(step) * step;
+    let upper = lower.saturating_add(step);
+    let dl = (value - lower).abs();
+    let du = (upper - value).abs();
+    if du <= dl { upper } else { lower }
+}
+
+fn gcd_i64(a: i64, b: i64) -> i64 {
+    let mut x = a.abs();
+    let mut y = b.abs();
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn lcm_i64(a: i64, b: i64) -> Result<i64, String> {
+    if a == 0 || b == 0 {
+        return Ok(0);
+    }
+    let g = gcd_i64(a, b);
+    let scaled = (a / g)
+        .checked_mul(b)
+        .ok_or_else(|| "lcm overflowed 64-bit range".to_string())?;
+    Ok(scaled.abs())
+}
+
+fn is_prime_i64(n: i64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
+    let mut d = 3i64;
+    while d <= n / d {
+        if n % d == 0 {
+            return false;
+        }
+        d += 2;
+    }
+    true
 }
 
 fn parse_scaled_thousand(raw: &str) -> Result<i64, String> {

@@ -215,6 +215,45 @@ fn parses_and_runs_embedded_hardware_library_builtins() {
 }
 
 #[test]
+fn parses_and_runs_extended_math_and_bit_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own fx = to_float("3.500")
+    own r = round(fx)
+    own t = trunc(fx)
+    own f = frac(fx)
+    own sn = snap(33, 16)
+
+    own lg10 = log10(to_float("10.000"))
+    own nln = ln(to_float("1.000"))
+    own ex = exp(to_float("0.000"))
+
+    own a1 = asin(0)
+    own a2 = acos(0)
+    own a3 = atan(1000)
+    own a4 = atan2(1, 0)
+
+    own g = gcd(18, 12)
+    own l = lcm(18, 12)
+    own p = is_prime(29)
+    own np2 = next_pow2(1000)
+
+    own pc = popcount(0xFF)
+    own lz = leading_zeros(1)
+    own tz = trailing_zeros(16)
+
+    if r == 4 and t == 3 and f == 500 and sn == 32 and lg10 == 1000 and nln == 0 and ex == 1000 and a1 == 0 and a2 == 90000 and a3 >= 44999 and a3 <= 45001 and a4 == 90000 and g == 6 and l == 36 and p and np2 == 1024 and pc == 8 and lz == 63 and tz == 4:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn rejects_invalid_cycle_contract_policy() {
     let src = r#"section .text:
   fn main():

@@ -48,8 +48,11 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
 - Expressions: arithmetic, comparison, bitwise (`&`, `|`, `<<`, `>>`), call expressions
 - Tri-state logic: `true`, `false`, `maybe`, `and`, `or`, `xor`, `not`
 - Builtins:
-  - math: `abs`, `sqrt`, `floor`, `ceil`, `log2`, `sin`, `cos`, `tan`, `pow`, `min`, `max`, `clamp`
+  - math: `abs`, `sqrt`, `floor`, `ceil`, `round`, `trunc`, `frac`, `snap`, `log2`, `log10`, `ln`, `exp`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow`, `min`, `max`, `clamp`
     - `sin/cos/tan` use integer degree input and return fixed-point milli-units (`1000 == 1.0`)
+    - `asin/acos/atan/atan2` return angle in milli-degrees (`90000 == 90.000 degrees`)
+  - integer math: `gcd`, `lcm`, `is_prime`, `next_pow2`
+  - bit math: `popcount`, `leading_zeros`, `trailing_zeros`, `bit_reverse`
   - collections (string-encoded): `array_new`, `array_len`, `array_push`, `array_get`, `queue_new`, `queue_len`, `queue_push`, `queue_peek`, `queue_pop`, `ring_new`, `ring_len`, `ring_push`, `ring_peek`
   - string: `len`, `upper`, `lower`, `contains`, `split`, `join`
   - logic: `phase`, `collapse`

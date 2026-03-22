@@ -290,6 +290,47 @@ fn vm_executes_embedded_hardware_library_builtins() {
 }
 
 #[test]
+fn vm_executes_extended_math_and_bit_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own fx = to_float("12.750")
+    own r = round(fx)
+    own t = trunc(fx)
+    own f = frac(fx)
+    own snapped = snap(14, 8)
+
+    own lg10 = log10(to_float("1000.000"))
+    own nln = ln(to_float("2.718"))
+    own ex = exp(to_float("1.000"))
+
+    own a1 = asin(500)
+    own a2 = acos(500)
+    own a3 = atan(1000)
+    own a4 = atan2(1, 1)
+
+    own g = gcd(84, 30)
+    own l = lcm(84, 30)
+    own p = is_prime(97)
+    own np2 = next_pow2(513)
+
+    own pc = popcount(0xF0F0)
+    own lz = leading_zeros(1)
+    own tz = trailing_zeros(8)
+    own br = bit_reverse(1)
+
+    if r == 13 and t == 12 and f == 750 and snapped == 16 and lg10 == 3000 and nln >= 999 and nln <= 1001 and ex >= 2717 and ex <= 2719 and a1 >= 29999 and a1 <= 30001 and a2 >= 59999 and a2 <= 60001 and a3 >= 44999 and a3 <= 45001 and a4 >= 44999 and a4 <= 45001 and g == 6 and l == 420 and p and np2 == 1024 and pc == 8 and lz == 63 and tz == 3 and br < 0:
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():
