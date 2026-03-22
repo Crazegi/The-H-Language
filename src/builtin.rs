@@ -1,4 +1,8 @@
 use crate::evaluator::Value;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn builtin_arity(name: &str) -> Option<usize> {
     match name {
@@ -15,6 +19,24 @@ pub fn builtin_arity(name: &str) -> Option<usize> {
         "phase" => Some(2),
         "collapse" => Some(1),
         "sleep_until" => Some(1),
+        "sleep_ms" => Some(1),
+        "now_ms" => Some(0),
+        "rand_int" => Some(2),
+        "input" => Some(1),
+        "read_text" => Some(1),
+        "write_text" => Some(2),
+        "append_text" => Some(2),
+        "exists" => Some(1),
+        "delete_file" => Some(1),
+        "env" => Some(1),
+        "to_int" => Some(1),
+        "to_string" => Some(1),
+        "trim" => Some(1),
+        "replace" => Some(3),
+        "window_loop" => Some(2),
+        "menu" => Some(2),
+        "http_get" => Some(1),
+        "json_parse" => Some(2),
         _ => None,
     }
 }
@@ -88,6 +110,151 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String>
             // Runtime-neutral hook: this will become a real interrupt wait in backend-specific runtimes.
             Value::Bool(true)
         }
+        "sleep_ms" => {
+            let ms = int_arg(args, 0)?;
+            if ms < 0 {
+                return Err("sleep_ms expects non-negative milliseconds".to_string());
+            }
+            thread::sleep(Duration::from_millis(ms as u64));
+            Value::Unit
+        }
+        "now_ms" => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "System time is before UNIX_EPOCH".to_string())?;
+            Value::Int(now.as_millis() as i64)
+        }
+        "rand_int" => {
+            let lo = int_arg(args, 0)?;
+            let hi = int_arg(args, 1)?;
+            if lo > hi {
+                return Err("rand_int expects lo <= hi".to_string());
+            }
+
+            let span = (hi - lo + 1) as u64;
+            let seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "System time is before UNIX_EPOCH".to_string())?
+                .as_nanos() as u64;
+            let mixed = seed ^ (seed.rotate_left(13)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            Value::Int(lo + (mixed % span) as i64)
+        }
+        "input" => {
+            let prompt = str_arg(args, 0)?;
+            print!("{}", prompt);
+            io::stdout()
+                .flush()
+                .map_err(|e| format!("input flush failed: {}", e))?;
+
+            let mut line = String::new();
+            io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| format!("input read failed: {}", e))?;
+
+            while line.ends_with('\n') || line.ends_with('\r') {
+                line.pop();
+            }
+            Value::Str(line)
+        }
+        "read_text" => {
+            let path = str_arg(args, 0)?;
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("read_text failed for `{}`: {}", path, e))?;
+            Value::Str(content)
+        }
+        "write_text" => {
+            let path = str_arg(args, 0)?;
+            let content = str_arg(args, 1)?;
+            fs::write(path, content)
+                .map_err(|e| format!("write_text failed for `{}`: {}", path, e))?;
+            Value::Bool(true)
+        }
+        "append_text" => {
+            let path = str_arg(args, 0)?;
+            let content = str_arg(args, 1)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| format!("append_text open failed for `{}`: {}", path, e))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("append_text write failed for `{}`: {}", path, e))?;
+            Value::Bool(true)
+        }
+        "exists" => {
+            let path = str_arg(args, 0)?;
+            Value::Bool(std::path::Path::new(path).exists())
+        }
+        "delete_file" => {
+            let path = str_arg(args, 0)?;
+            match fs::remove_file(path) {
+                Ok(_) => Value::Bool(true),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Bool(false),
+                Err(e) => {
+                    return Err(format!("delete_file failed for `{}`: {}", path, e));
+                }
+            }
+        }
+        "env" => {
+            let key = str_arg(args, 0)?;
+            Value::Str(std::env::var(key).unwrap_or_default())
+        }
+        "to_int" => {
+            let raw = str_arg(args, 0)?;
+            let parsed = raw
+                .trim()
+                .parse::<i64>()
+                .map_err(|e| format!("to_int parse failed: {}", e))?;
+            Value::Int(parsed)
+        }
+        "to_string" => {
+            let value = args
+                .get(0)
+                .ok_or_else(|| "Missing argument".to_string())?;
+            Value::Str(value_to_string(value))
+        }
+        "trim" => Value::Str(str_arg(args, 0)?.trim().to_string()),
+        "replace" => {
+            let source = str_arg(args, 0)?;
+            let from = str_arg(args, 1)?;
+            let to = str_arg(args, 2)?;
+            Value::Str(source.replace(from, to))
+        }
+        "window_loop" => {
+            let title = str_arg(args, 0)?;
+            let ticks = int_arg(args, 1)?;
+            if ticks < 0 {
+                return Err("window_loop expects non-negative tick count".to_string());
+            }
+            Value::Str(format!("window:{}:ticks={}", title, ticks))
+        }
+        "menu" => {
+            let _title = str_arg(args, 0)?;
+            let options = str_arg(args, 1)?;
+            let first = options
+                .split('|')
+                .next()
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            if first.is_empty() {
+                Value::Maybe
+            } else {
+                Value::Str(first)
+            }
+        }
+        "http_get" => {
+            let url = str_arg(args, 0)?;
+            let escaped_url = escape_json_string(url);
+            Value::Str(format!(
+                "{{\"status\":200,\"url\":\"{}\",\"body\":\"stub\"}}",
+                escaped_url
+            ))
+        }
+        "json_parse" => {
+            let json = str_arg(args, 0)?;
+            let key = str_arg(args, 1)?;
+            parse_json_field(json, key).unwrap_or(Value::Maybe)
+        }
         _ => return Ok(None),
     };
 
@@ -125,4 +292,69 @@ fn logic_phase(a: Logic3, b: Logic3) -> Logic3 {
         (Logic3::True, Logic3::True) => Logic3::True,
         _ => Logic3::Maybe,
     }
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::Int(v) => v.to_string(),
+        Value::Str(v) => v.clone(),
+        Value::Bool(v) => v.to_string(),
+        Value::Maybe => "maybe".to_string(),
+        Value::Ref(v) => format!("&{}", v),
+        Value::Unit => "unit".to_string(),
+    }
+}
+
+fn escape_json_string(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn parse_json_field(json: &str, key: &str) -> Option<Value> {
+    let key_pattern = format!("\"{}\"", key);
+    let key_pos = json.find(&key_pattern)?;
+    let after_key = &json[key_pos + key_pattern.len()..];
+    let colon_offset = after_key.find(':')?;
+    let mut value_part = after_key[colon_offset + 1..].trim_start();
+
+    if value_part.starts_with('"') {
+        value_part = &value_part[1..];
+        let mut escaped = false;
+        let mut out = String::new();
+        for ch in value_part.chars() {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                return Some(Value::Str(out));
+            }
+            out.push(ch);
+        }
+        return None;
+    }
+
+    if value_part.starts_with("true") {
+        return Some(Value::Bool(true));
+    }
+    if value_part.starts_with("false") {
+        return Some(Value::Bool(false));
+    }
+    if value_part.starts_with("null") {
+        return Some(Value::Maybe);
+    }
+
+    let end = value_part
+        .find(|c: char| c == ',' || c == '}' || c.is_whitespace())
+        .unwrap_or(value_part.len());
+    let number = &value_part[..end];
+    if let Ok(v) = number.parse::<i64>() {
+        return Some(Value::Int(v));
+    }
+
+    None
 }

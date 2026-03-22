@@ -52,8 +52,50 @@ tri-state logic (`maybe`) helps represent uncertain sensor state without unsafe 
   - string: `len`, `upper`, `lower`, `contains`
   - logic: `phase`, `collapse`
   - hardware: `sleep_until(interrupt)`
+  - desktop:
+    - input: `input(prompt)`
+    - file I/O: `read_text`, `write_text`, `append_text`, `exists`, `delete_file`
+    - time/random: `sleep_ms`, `now_ms`, `rand_int`
+    - utilities: `env`, `to_int`, `to_string`, `trim`, `replace`
+    - starter API scaffold: `window_loop`, `menu`, `http_get`, `json_parse`
 - Control flow: `if/else`, `while`, `repeat`, `return`
 - Structured output: YAML-style `print:` blocks
+
+## Desktop Starter API Scaffold
+
+H now includes a lightweight desktop-oriented scaffold API to reduce boilerplate when prototyping
+small GUI/network-style flows.
+
+Available scaffold builtins:
+
+- `window_loop(title, ticks)`
+  - returns a deterministic loop descriptor string (scaffold behavior)
+- `menu(title, "A|B|C")`
+  - returns the first menu option as a simple deterministic selection
+- `http_get(url)`
+  - returns a stub JSON response string: `{"status":200,"url":"...","body":"stub"}`
+- `json_parse(json, key)`
+  - extracts simple top-level values from JSON-like text (`string`, `int`, `bool`, `null`)
+
+Example:
+
+```text
+section .text:
+  fn main():
+    own payload = http_get("https://example.com/api")
+    own status = json_parse(payload, "status")
+    own url = json_parse(payload, "url")
+    own picked = menu("Main", "Open|Settings|Exit")
+    own loop_result = window_loop("DemoApp", 2)
+
+    if status == 200 and contains(url, "example.com") and picked == "Open" and contains(loop_result, "DemoApp"):
+      return 1
+    return 0
+```
+
+Note:
+- These are intentionally scaffold-level primitives to keep behavior deterministic and portable across interpreter/VM/native modes.
+- They are ideal for prototypes and CLI/desktop utility scripts while richer runtime layers evolve.
 
 ## Hardware Port Ownership (Long Note)
 

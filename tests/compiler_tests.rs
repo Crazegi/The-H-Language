@@ -106,6 +106,63 @@ fn vm_executes_bitwise_and_sleep_until_builtin() {
 }
 
 #[test]
+fn vm_executes_desktop_file_and_utility_builtins() {
+    let path = unique_profile_path("desktop_utils_vm.txt");
+    let path_h = path.to_string_lossy().replace('\\', "/");
+
+    let src = format!(
+        r#"section .text:
+  fn main():
+    own path = "{}"
+    own wrote = write_text(path, "hello")
+    own appended = append_text(path, "_world")
+    own text = read_text(path)
+    own exists_before = exists(path)
+    own deleted = delete_file(path)
+    own exists_after = exists(path)
+    own n = to_int(trim(" 42 "))
+    own s = to_string(n)
+    own replaced = replace(s, "2", "7")
+    own now = now_ms()
+    own fixed = rand_int(5, 5)
+    sleep_ms(0)
+    if wrote and appended and exists_before and deleted and (not exists_after) and text == "hello_world" and replaced == "47" and now >= 0 and fixed == 5:
+      return 1
+    return 0
+"#,
+        path_h
+    );
+
+    let program = parse_source(&src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn vm_executes_desktop_starter_api_scaffold_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own payload = http_get("https://example.com/api")
+    own status = json_parse(payload, "status")
+    own url = json_parse(payload, "url")
+    own picked = menu("Main", "Open|Settings|Exit")
+    own loop_result = window_loop("DemoApp", 2)
+
+    if status == 200 and contains(url, "example.com") and picked == "Open" and contains(loop_result, "DemoApp"):
+      return 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let bytecode = compile_program(&program).expect("compile should pass");
+    let result = run_bytecode(&bytecode).expect("vm run should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
 fn cycle_contract_underflow_pads_with_nop() {
     let src = r#"section .text:
   fn main():

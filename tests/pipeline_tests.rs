@@ -1,4 +1,13 @@
 use hl_lexer::{analyze, parse_source, run_program};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_path(file_name: &str) -> std::path::PathBuf {
+  let nanos = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("clock before unix epoch")
+    .as_nanos();
+  std::env::temp_dir().join(format!("hl_desktop_{}_{}", nanos, file_name))
+}
 
 const PROGRAM: &str = r#"section .data:
   sensor_name: "Engine"
@@ -292,6 +301,61 @@ fn parses_and_runs_bitwise_and_sleep_until_builtin() {
     own reg = ((1 << 5) | 3) & 0x1F
     if woke:
       return reg >> 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn parses_and_runs_desktop_file_and_utility_builtins() {
+    let path = unique_temp_path("desktop_utils_pipeline.txt");
+    let path_h = path.to_string_lossy().replace('\\', "/");
+
+    let src = format!(
+        r#"section .text:
+  fn main():
+    own path = "{}"
+    own wrote = write_text(path, "hello")
+    own appended = append_text(path, "_world")
+    own text = read_text(path)
+    own exists_before = exists(path)
+    own deleted = delete_file(path)
+    own exists_after = exists(path)
+    own n = to_int(trim(" 42 "))
+    own s = to_string(n)
+    own replaced = replace(s, "2", "7")
+    own now = now_ms()
+    own fixed = rand_int(5, 5)
+    sleep_ms(0)
+    if wrote and appended and exists_before and deleted and (not exists_after) and text == "hello_world" and replaced == "47" and now >= 0 and fixed == 5:
+      return 1
+    return 0
+"#,
+        path_h
+    );
+
+    let program = parse_source(&src).expect("parse should pass");
+    analyze(&program).expect("semantic analysis should pass");
+    let result = run_program(&program).expect("runtime should pass");
+    assert_eq!(result.render(), "1");
+}
+
+#[test]
+fn parses_and_runs_desktop_starter_api_scaffold_builtins() {
+    let src = r#"section .text:
+  fn main():
+    own payload = http_get("https://example.com/api")
+    own status = json_parse(payload, "status")
+    own url = json_parse(payload, "url")
+    own picked = menu("Main", "Open|Settings|Exit")
+    own loop_result = window_loop("DemoApp", 2)
+
+    if status == 200 and contains(url, "example.com") and picked == "Open" and contains(loop_result, "DemoApp"):
+      return 1
     return 0
 "#;
 

@@ -161,6 +161,10 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     let mut out = String::new();
     out.push_str("use std::cmp::Ordering;\n");
     out.push_str("use std::collections::HashMap;\n\n");
+    out.push_str("use std::fs::{self, OpenOptions};\n");
+    out.push_str("use std::io::{self, Write};\n");
+    out.push_str("use std::thread;\n");
+    out.push_str("use std::time::{Duration, SystemTime, UNIX_EPOCH};\n\n");
 
     out.push_str("#[derive(Clone, Debug)]\n");
     out.push_str("enum Value { Int(i64), Str(String), Bool(bool), Maybe, Ref(String), Unit }\n\n");
@@ -222,6 +226,39 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("  match args.get(idx) { Some(Value::Str(v)) => Ok(v.as_str()), _ => Err(\"expected string argument\".to_string()) }\n");
     out.push_str("}\n\n");
 
+    out.push_str("fn builtin_value_to_string(v: &Value) -> String {\n");
+    out.push_str("  match v { Value::Int(n) => n.to_string(), Value::Str(s) => s.clone(), Value::Bool(b) => b.to_string(), Value::Maybe => \"maybe\".to_string(), Value::Ref(name) => format!(\"&{}\", name), Value::Unit => \"unit\".to_string() }\n");
+    out.push_str("}\n\n");
+
+    out.push_str("fn escape_json_string(input: &str) -> String { input.replace('\\\\', \"\\\\\\\\\").replace('\\\"', \"\\\\\\\"\") }\n\n");
+
+    out.push_str("fn parse_json_field(json: &str, key: &str) -> Option<Value> {\n");
+    out.push_str("  let key_pattern = format!(\"\\\"{}\\\"\", key);\n");
+    out.push_str("  let key_pos = json.find(&key_pattern)?;\n");
+    out.push_str("  let after_key = &json[key_pos + key_pattern.len()..];\n");
+    out.push_str("  let colon_offset = after_key.find(':')?;\n");
+    out.push_str("  let mut value_part = after_key[colon_offset + 1..].trim_start();\n");
+    out.push_str("  if value_part.starts_with('\\\"') {\n");
+    out.push_str("    value_part = &value_part[1..];\n");
+    out.push_str("    let mut escaped = false;\n");
+    out.push_str("    let mut out = String::new();\n");
+    out.push_str("    for ch in value_part.chars() {\n");
+    out.push_str("      if escaped { out.push(ch); escaped = false; continue; }\n");
+    out.push_str("      if ch == '\\\\' { escaped = true; continue; }\n");
+    out.push_str("      if ch == '\\\"' { return Some(Value::Str(out)); }\n");
+    out.push_str("      out.push(ch);\n");
+    out.push_str("    }\n");
+    out.push_str("    return None;\n");
+    out.push_str("  }\n");
+    out.push_str("  if value_part.starts_with(\"true\") { return Some(Value::Bool(true)); }\n");
+    out.push_str("  if value_part.starts_with(\"false\") { return Some(Value::Bool(false)); }\n");
+    out.push_str("  if value_part.starts_with(\"null\") { return Some(Value::Maybe); }\n");
+    out.push_str("  let end = value_part.find(|c: char| c == ',' || c == '}' || c.is_whitespace()).unwrap_or(value_part.len());\n");
+    out.push_str("  let number = &value_part[..end];\n");
+    out.push_str("  if let Ok(v) = number.parse::<i64>() { return Some(Value::Int(v)); }\n");
+    out.push_str("  None\n");
+    out.push_str("}\n\n");
+
     out.push_str("fn call_builtin(name: &str, args: &[Value]) -> Result<Option<Value>, String> {\n");
     out.push_str("  let out = match name {\n");
     out.push_str("    \"abs\" => Value::Int(builtin_int_arg(args, 0)?.abs()),\n");
@@ -237,6 +274,24 @@ fn generate_rust_runtime_module(program: &BytecodeProgram) -> String {
     out.push_str("    \"phase\" => { let a = to_logic(args.get(0).ok_or_else(|| \"missing argument\".to_string())?)?; let b = to_logic(args.get(1).ok_or_else(|| \"missing argument\".to_string())?)?; from_logic(logic_phase(a, b)) },\n");
     out.push_str("    \"collapse\" => { let v = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; Value::Bool(matches!(to_logic(v)?, Logic3::True)) },\n");
     out.push_str("    \"sleep_until\" => { if args.get(0).is_none() { return Err(\"missing argument\".to_string()); } Value::Bool(true) },\n");
+    out.push_str("    \"sleep_ms\" => { let ms = builtin_int_arg(args, 0)?; if ms < 0 { return Err(\"sleep_ms expects non-negative milliseconds\".to_string()); } thread::sleep(Duration::from_millis(ms as u64)); Value::Unit },\n");
+    out.push_str("    \"now_ms\" => { let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| \"system time is before UNIX_EPOCH\".to_string())?; Value::Int(now.as_millis() as i64) },\n");
+    out.push_str("    \"rand_int\" => { let lo = builtin_int_arg(args, 0)?; let hi = builtin_int_arg(args, 1)?; if lo > hi { return Err(\"rand_int expects lo <= hi\".to_string()); } let span = (hi - lo + 1) as u64; let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| \"system time is before UNIX_EPOCH\".to_string())?.as_nanos() as u64; let mixed = seed ^ (seed.rotate_left(13)).wrapping_mul(0x9E37_79B9_7F4A_7C15); Value::Int(lo + (mixed % span) as i64) },\n");
+    out.push_str("    \"input\" => { let prompt = builtin_str_arg(args, 0)?; print!(\"{}\", prompt); io::stdout().flush().map_err(|e| format!(\"input flush failed: {}\", e))?; let mut line = String::new(); io::stdin().read_line(&mut line).map_err(|e| format!(\"input read failed: {}\", e))?; while line.ends_with('\\n') || line.ends_with('\\r') { line.pop(); } Value::Str(line) },\n");
+    out.push_str("    \"read_text\" => { let path = builtin_str_arg(args, 0)?; let content = fs::read_to_string(path).map_err(|e| format!(\"read_text failed for `{}`: {}\", path, e))?; Value::Str(content) },\n");
+    out.push_str("    \"write_text\" => { let path = builtin_str_arg(args, 0)?; let content = builtin_str_arg(args, 1)?; fs::write(path, content).map_err(|e| format!(\"write_text failed for `{}`: {}\", path, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"append_text\" => { let path = builtin_str_arg(args, 0)?; let content = builtin_str_arg(args, 1)?; let mut file = OpenOptions::new().create(true).append(true).open(path).map_err(|e| format!(\"append_text open failed for `{}`: {}\", path, e))?; file.write_all(content.as_bytes()).map_err(|e| format!(\"append_text write failed for `{}`: {}\", path, e))?; Value::Bool(true) },\n");
+    out.push_str("    \"exists\" => { let path = builtin_str_arg(args, 0)?; Value::Bool(std::path::Path::new(path).exists()) },\n");
+    out.push_str("    \"delete_file\" => { let path = builtin_str_arg(args, 0)?; match fs::remove_file(path) { Ok(_) => Value::Bool(true), Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Bool(false), Err(e) => return Err(format!(\"delete_file failed for `{}`: {}\", path, e)) } },\n");
+    out.push_str("    \"env\" => { let key = builtin_str_arg(args, 0)?; Value::Str(std::env::var(key).unwrap_or_default()) },\n");
+    out.push_str("    \"to_int\" => { let raw = builtin_str_arg(args, 0)?; let parsed = raw.trim().parse::<i64>().map_err(|e| format!(\"to_int parse failed: {}\", e))?; Value::Int(parsed) },\n");
+    out.push_str("    \"to_string\" => { let v = args.get(0).ok_or_else(|| \"missing argument\".to_string())?; Value::Str(builtin_value_to_string(v)) },\n");
+    out.push_str("    \"trim\" => { let s = builtin_str_arg(args, 0)?; Value::Str(s.trim().to_string()) },\n");
+    out.push_str("    \"replace\" => { let source = builtin_str_arg(args, 0)?; let from = builtin_str_arg(args, 1)?; let to = builtin_str_arg(args, 2)?; Value::Str(source.replace(from, to)) },\n");
+    out.push_str("    \"window_loop\" => { let title = builtin_str_arg(args, 0)?; let ticks = builtin_int_arg(args, 1)?; if ticks < 0 { return Err(\"window_loop expects non-negative tick count\".to_string()); } Value::Str(format!(\"window:{}:ticks={}\", title, ticks)) },\n");
+    out.push_str("    \"menu\" => { let _title = builtin_str_arg(args, 0)?; let options = builtin_str_arg(args, 1)?; let first = options.split('|').next().map(|s| s.trim().to_string()).unwrap_or_default(); if first.is_empty() { Value::Maybe } else { Value::Str(first) } },\n");
+    out.push_str("    \"http_get\" => { let url = builtin_str_arg(args, 0)?; let escaped = escape_json_string(url); Value::Str(format!(\"{{\\\"status\\\":200,\\\"url\\\":\\\"{}\\\",\\\"body\\\":\\\"stub\\\"}}\", escaped)) },\n");
+    out.push_str("    \"json_parse\" => { let json = builtin_str_arg(args, 0)?; let key = builtin_str_arg(args, 1)?; parse_json_field(json, key).unwrap_or(Value::Maybe) },\n");
     out.push_str("    _ => return Ok(None),\n");
     out.push_str("  };\n");
     out.push_str("  Ok(Some(out))\n");
