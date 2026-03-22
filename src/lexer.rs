@@ -217,14 +217,14 @@ impl Lexer {
             Some('\n') => {
                 self.pos = start_pos;
                 self.column = 1;
-                return;
+                return Ok(());
             }
             Some('/') if self.peek_char() == Some('/') => {
                 self.pos = start_pos;
                 self.column = 1;
-                return;
+                return Ok(());
             }
-            None => return,
+            None => return Ok(()),
             _ => {}
         }
 
@@ -270,6 +270,7 @@ impl Lexer {
         }
 
         self.line_has_content = false;
+        Ok(())
     }
 
     fn scan_word(&mut self) -> Token {

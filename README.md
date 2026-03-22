@@ -5,7 +5,9 @@ This repository now contains a complete end-to-end prototype for H (`.hl`) in Ru
 - Lexer (indentation-sensitive, YAML-style blocks)
 - AST and recursive descent parser
 - Semantic analyzer (ownership/reference checks + symbol/function checks)
-- Evaluator/runtime
+- Interpreter runtime
+- Compiler backend (AST -> bytecode)
+- Bytecode VM
 
 ## Implemented Language Features
 
@@ -41,10 +43,22 @@ AST dump:
 cargo run --bin hl-lex -- --ast examples/advanced.hl
 ```
 
-Run program:
+Interpret source program:
 
 ```powershell
 cargo run --bin hl-lex -- examples/advanced.hl
+```
+
+Compile to bytecode listing:
+
+```powershell
+cargo run --bin hl-lex -- --compile examples/advanced.hl --out out.hbc.txt
+```
+
+Run compiled bytecode in VM:
+
+```powershell
+cargo run --bin hl-lex -- --vm examples/advanced.hl
 ```
 
 Run tests:

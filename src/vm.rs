@@ -1,0 +1,314 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+use crate::bytecode::{BytecodeProgram, Instruction};
+use crate::evaluator::Value;
+
+#[derive(Debug, Clone)]
+pub struct VmError {
+    pub message: String,
+}
+
+impl VmError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for VmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for VmError {}
+
+#[derive(Debug, Clone)]
+struct Frame {
+    locals: HashMap<String, Value>,
+    stack: Vec<Value>,
+}
+
+pub fn run_bytecode(program: &BytecodeProgram) -> Result<Value, VmError> {
+    let entry = if program.functions.contains_key("main") {
+        "main"
+    } else {
+        program
+            .functions
+            .keys()
+            .next()
+            .ok_or_else(|| VmError::new("No functions to execute"))?
+    };
+
+    call_function(program, entry, Vec::new())
+}
+
+fn call_function(program: &BytecodeProgram, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
+    let function = program
+        .functions
+        .get(name)
+        .ok_or_else(|| VmError::new(format!("Unknown function `{}`", name)))?;
+
+    if function.params.len() != args.len() {
+        return Err(VmError::new(format!(
+            "Function `{}` expects {} args, got {}",
+            name,
+            function.params.len(),
+            args.len()
+        )));
+    }
+
+    let mut frame = Frame {
+        locals: HashMap::new(),
+        stack: Vec::new(),
+    };
+
+    for (p, arg) in function.params.iter().zip(args.into_iter()) {
+        frame.locals.insert(p.clone(), arg);
+    }
+
+    let mut ip = 0usize;
+    while ip < function.code.len() {
+        match &function.code[ip] {
+            Instruction::PushInt(v) => frame.stack.push(Value::Int(*v)),
+            Instruction::PushStr(v) => frame.stack.push(Value::Str(v.clone())),
+            Instruction::PushBool(v) => frame.stack.push(Value::Bool(*v)),
+            Instruction::PushUnit => frame.stack.push(Value::Unit),
+            Instruction::LoadVar(name) => {
+                let v = resolve_name(program, &frame.locals, name)?;
+                frame.stack.push(v);
+            }
+            Instruction::DefineVar(name) => {
+                let v = pop(&mut frame.stack)?;
+                frame.locals.insert(name.clone(), v);
+            }
+            Instruction::StoreVar(name) => {
+                let v = pop(&mut frame.stack)?;
+                store_var(&mut frame.locals, name, v)?;
+            }
+            Instruction::StoreOrDefine(name) => {
+                let v = pop(&mut frame.stack)?;
+                if frame.locals.contains_key(name) {
+                    store_var(&mut frame.locals, name, v)?;
+                } else {
+                    frame.locals.insert(name.clone(), v);
+                }
+            }
+            Instruction::DeclareRef { name, target } => {
+                if !frame.locals.contains_key(target) && !program.globals.contains_key(target) {
+                    return Err(VmError::new(format!(
+                        "Cannot borrow unknown symbol `{}`",
+                        target
+                    )));
+                }
+                frame.locals.insert(name.clone(), Value::Ref(target.clone()));
+            }
+            Instruction::Add => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                frame.stack.push(add_values(l, r)?);
+            }
+            Instruction::Sub => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l - r));
+            }
+            Instruction::Mul => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l * r));
+            }
+            Instruction::Div => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                if r == 0 {
+                    return Err(VmError::new("Division by zero"));
+                }
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l / r));
+            }
+            Instruction::Mod => {
+                let r = as_int(pop(&mut frame.stack)?)?;
+                if r == 0 {
+                    return Err(VmError::new("Modulo by zero"));
+                }
+                let l = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(l % r));
+            }
+            Instruction::Eq => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                frame.stack.push(Value::Bool(equals(&l, &r)));
+            }
+            Instruction::Ne => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                frame.stack.push(Value::Bool(!equals(&l, &r)));
+            }
+            Instruction::Lt => cmp_push(&mut frame.stack, Ordering::Less)?,
+            Instruction::Lte => cmp_push_lte(&mut frame.stack)?,
+            Instruction::Gt => cmp_push(&mut frame.stack, Ordering::Greater)?,
+            Instruction::Gte => cmp_push_gte(&mut frame.stack)?,
+            Instruction::Neg => {
+                let v = as_int(pop(&mut frame.stack)?)?;
+                frame.stack.push(Value::Int(-v));
+            }
+            Instruction::Cmp3 => {
+                let r = pop(&mut frame.stack)?;
+                let l = pop(&mut frame.stack)?;
+                let ord = compare_values(&l, &r)?;
+                let mapped = match ord {
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                };
+                frame.stack.push(Value::Int(mapped));
+            }
+            Instruction::Jump(target) => {
+                ip = *target;
+                continue;
+            }
+            Instruction::JumpIfFalse(target) => {
+                let cond = as_bool(pop(&mut frame.stack)?)?;
+                if !cond {
+                    ip = *target;
+                    continue;
+                }
+            }
+            Instruction::Call(name, argc) => {
+                let mut args = Vec::with_capacity(*argc);
+                for _ in 0..*argc {
+                    args.push(pop(&mut frame.stack)?);
+                }
+                args.reverse();
+                let result = call_function(program, name, args)?;
+                frame.stack.push(result);
+            }
+            Instruction::PrintBegin => {
+                println!("print:");
+            }
+            Instruction::PrintField(key) => {
+                let value = pop(&mut frame.stack)?;
+                println!("  {}: {}", key, value.render());
+            }
+            Instruction::PrintEnd => {}
+            Instruction::Pop => {
+                let _ = pop(&mut frame.stack)?;
+            }
+            Instruction::Return => {
+                let ret = frame.stack.pop().unwrap_or(Value::Unit);
+                return Ok(ret);
+            }
+        }
+
+        ip += 1;
+    }
+
+    Ok(Value::Unit)
+}
+
+fn pop(stack: &mut Vec<Value>) -> Result<Value, VmError> {
+    stack
+        .pop()
+        .ok_or_else(|| VmError::new("VM stack underflow"))
+}
+
+fn resolve_name(
+    program: &BytecodeProgram,
+    locals: &HashMap<String, Value>,
+    name: &str,
+) -> Result<Value, VmError> {
+    if let Some(v) = locals.get(name) {
+        return match v {
+            Value::Ref(target) => resolve_name(program, locals, target),
+            _ => Ok(v.clone()),
+        };
+    }
+
+    if let Some(v) = program.globals.get(name) {
+        return Ok(v.clone());
+    }
+
+    Err(VmError::new(format!("Unknown symbol `{}`", name)))
+}
+
+fn store_var(locals: &mut HashMap<String, Value>, name: &str, value: Value) -> Result<(), VmError> {
+    match locals.get(name) {
+        Some(Value::Ref(target)) => Err(VmError::new(format!(
+            "Cannot assign to ref binding `{}` (points to `{}`)",
+            name, target
+        ))),
+        Some(_) => {
+            locals.insert(name.to_string(), value);
+            Ok(())
+        }
+        None => Err(VmError::new(format!("Unknown local symbol `{}`", name))),
+    }
+}
+
+fn as_int(v: Value) -> Result<i64, VmError> {
+    match v {
+        Value::Int(n) => Ok(n),
+        _ => Err(VmError::new("Expected integer value")),
+    }
+}
+
+fn as_bool(v: Value) -> Result<bool, VmError> {
+    match v {
+        Value::Bool(b) => Ok(b),
+        Value::Int(n) => Ok(n != 0),
+        _ => Err(VmError::new("Expected boolean-compatible value")),
+    }
+}
+
+fn add_values(left: Value, right: Value) -> Result<Value, VmError> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+        (Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{}{}", a, b))),
+        _ => Err(VmError::new("Invalid types for `+`")),
+    }
+}
+
+fn cmp_push(stack: &mut Vec<Value>, expected: Ordering) -> Result<(), VmError> {
+    let r = pop(stack)?;
+    let l = pop(stack)?;
+    let ord = compare_values(&l, &r)?;
+    stack.push(Value::Bool(ord == expected));
+    Ok(())
+}
+
+fn cmp_push_lte(stack: &mut Vec<Value>) -> Result<(), VmError> {
+    let r = pop(stack)?;
+    let l = pop(stack)?;
+    let ord = compare_values(&l, &r)?;
+    stack.push(Value::Bool(ord != Ordering::Greater));
+    Ok(())
+}
+
+fn cmp_push_gte(stack: &mut Vec<Value>) -> Result<(), VmError> {
+    let r = pop(stack)?;
+    let l = pop(stack)?;
+    let ord = compare_values(&l, &r)?;
+    stack.push(Value::Bool(ord != Ordering::Less));
+    Ok(())
+}
+
+fn compare_values(left: &Value, right: &Value) -> Result<Ordering, VmError> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
+        (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
+        (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
+        _ => Err(VmError::new("Cannot compare values of different types")),
+    }
+}
+
+fn equals(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Unit, Value::Unit) => true,
+        _ => false,
+    }
+}

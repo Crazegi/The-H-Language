@@ -20,14 +20,6 @@ impl ParseError {
             message: message.into(),
         }
     }
-
-    fn eof(message: impl Into<String>) -> Self {
-        Self {
-            line: 0,
-            column: 0,
-            message: message.into(),
-        }
-    }
 }
 
 impl std::fmt::Display for ParseError {
