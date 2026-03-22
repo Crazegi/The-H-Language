@@ -312,3 +312,88 @@ fn relaxed_contract_mode_allows_compile_error_policies() {
     );
     assert!(relaxed_ok.is_ok());
 }
+
+#[test]
+fn cycle_contract_allows_deterministic_high_level_subset() {
+    let src = r#"section .text:
+  fn main():
+    contract:
+      cycles: 7
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      own x = 1 + 2
+      if true:
+        add x, 1
+      else:
+        add x, 99
+      repeat 2:
+        sub x, 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let compiled = compile_program(&program).expect("compile should pass");
+
+    let main = compiled
+        .functions
+        .get("main")
+        .expect("main function should exist");
+    let nop_count = main
+        .code
+        .iter()
+        .filter(|ins| matches!(ins, Instruction::Nop))
+        .count();
+    assert_eq!(nop_count, 0);
+}
+
+#[test]
+fn cycle_contract_rejects_non_constant_if_condition() {
+    let src = r#"section .text:
+  fn main():
+    own gate = maybe
+    contract:
+      cycles: 4
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      if gate:
+        mov [port_a], 1
+      else:
+        mov [port_a], 0
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let err = compile_program(&program).expect_err("compile should fail on dynamic execute if");
+    assert!(err
+      .message
+      .contains("if` condition must be compile-time constant")
+      || err.message.contains("condition must be compile-time constant"));
+}
+
+#[test]
+fn cycle_contract_rejects_non_constant_repeat_count() {
+    let src = r#"section .text:
+  fn main():
+    own n = 2
+    contract:
+      cycles: 4
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      repeat n:
+        mov [port_a], 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("semantic pass should pass");
+    let err = compile_program(&program).expect_err("compile should fail on dynamic execute repeat");
+    assert!(err
+      .message
+      .contains("repeat` count must be compile-time constant")
+      || err.message.contains("count must be compile-time constant"));
+}

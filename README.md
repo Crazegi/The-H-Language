@@ -67,7 +67,9 @@ execute:
 ```
 
 Rules:
-- `execute` currently accepts instruction statements only.
+- `execute` supports deterministic statements: assembly instructions, `own`/assignment, `if`, and `repeat`.
+- `if` conditions and `repeat` counts inside `execute` must be compile-time constants.
+- Function calls are rejected inside `execute`.
 - Underflow can be padded with inserted `nop` instructions.
 - Overflow can be rejected as a compile-time error.
 

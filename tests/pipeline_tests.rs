@@ -153,3 +153,24 @@ fn rejects_brace_block_syntax() {
     let err = parse_source(src).expect_err("brace block syntax should fail parse");
     assert!(err.message.contains("Illegal character '{'"));
 }
+
+#[test]
+fn semantic_rejects_while_inside_execute_block() {
+    let src = r#"section .text:
+  fn main():
+    contract:
+      cycles: 8
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      while true:
+        mov [port_a], 1
+    return 0
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    let err = analyze(&program).expect_err("while in execute should fail semantic analysis");
+    assert!(err
+        .message
+        .contains("supports deterministic statements only"));
+}

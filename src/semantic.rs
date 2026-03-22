@@ -142,9 +142,9 @@ fn analyze_stmt(
                 return Err(SemanticError::new("Cycle contract `cycles` must be > 0"));
             }
             for s in body {
-                if !matches!(s, Stmt::Instruction { .. }) {
+                if !is_execute_stmt_shape_supported(s) {
                     return Err(SemanticError::new(
-                        "Cycle contract execute block supports only instruction statements",
+                        "Cycle contract execute block supports deterministic statements only: instruction, own/assign, if, repeat",
                     ));
                 }
                 analyze_stmt(s, symbols, refs, data, signatures)?;
@@ -242,4 +242,20 @@ fn builtin_arity(name: &str) -> Option<usize> {
 
 fn is_memory_target(target: &str) -> bool {
     target.starts_with('[') && target.ends_with(']') && target.len() > 2
+}
+
+fn is_execute_stmt_shape_supported(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Instruction { .. } | Stmt::OwnDecl { .. } | Stmt::Assign { .. } => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().all(is_execute_stmt_shape_supported)
+                && else_body.iter().all(is_execute_stmt_shape_supported)
+        }
+        Stmt::Repeat { body, .. } => body.iter().all(is_execute_stmt_shape_supported),
+        _ => false,
+    }
 }

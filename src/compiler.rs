@@ -438,11 +438,11 @@ impl FunctionCompiler {
         let contract_index = self.contract_counter;
 
         let mut total_cycles: u64 = 0;
+        let mut const_env: HashMap<String, FoldValue> = HashMap::new();
         for s in body {
             total_cycles = total_cycles
-                .checked_add(stmt_cycle_cost(s, self.options.cycle_profile)?)
+                .checked_add(self.compile_execute_stmt(s, &mut const_env)?)
                 .ok_or_else(|| CompileError::new("Cycle count overflow in contract block"))?;
-            self.compile_stmt(s)?;
         }
 
         let mut padded_nops = 0u64;
@@ -509,6 +509,128 @@ impl FunctionCompiler {
         Ok(())
     }
 
+    fn compile_execute_stmt(
+        &mut self,
+        stmt: &Stmt,
+        const_env: &mut HashMap<String, FoldValue>,
+    ) -> Result<u64, CompileError> {
+        match stmt {
+            Stmt::Instruction { op, target, rhs } => {
+                let cost = stmt_cycle_cost(stmt, self.options.cycle_profile)?;
+                self.compile_stmt(stmt)?;
+
+                if !is_memory_target(target) {
+                    match op {
+                        AstInstruction::Mov => {
+                            if let Some(value) = eval_execute_const_expr(
+                                rhs,
+                                const_env,
+                                self.options.fast_math,
+                            )? {
+                                const_env.insert(target.clone(), value);
+                            } else {
+                                const_env.remove(target);
+                            }
+                        }
+                        AstInstruction::Cmp => {
+                            const_env.insert("cmp".to_string(), FoldValue::Int(0));
+                            const_env.remove(target);
+                        }
+                        AstInstruction::Add
+                        | AstInstruction::Sub
+                        | AstInstruction::Mul
+                        | AstInstruction::Div
+                        | AstInstruction::Mod => {
+                            const_env.remove(target);
+                        }
+                    }
+                }
+
+                Ok(cost)
+            }
+            Stmt::OwnDecl { name, expr } => {
+                self.compile_stmt(stmt)?;
+                let mut cost = expr_cycle_cost(expr, self.options.cycle_profile)?;
+                cost = cost
+                    .checked_add(1)
+                    .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+
+                if let Some(value) =
+                    eval_execute_const_expr(expr, const_env, self.options.fast_math)?
+                {
+                    const_env.insert(name.clone(), value);
+                } else {
+                    const_env.remove(name);
+                }
+                Ok(cost)
+            }
+            Stmt::Assign { name, expr } => {
+                self.compile_stmt(stmt)?;
+                let mut cost = expr_cycle_cost(expr, self.options.cycle_profile)?;
+                cost = cost
+                    .checked_add(1)
+                    .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+
+                if let Some(value) =
+                    eval_execute_const_expr(expr, const_env, self.options.fast_math)?
+                {
+                    const_env.insert(name.clone(), value);
+                } else {
+                    const_env.remove(name);
+                }
+                Ok(cost)
+            }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let Some(cond) =
+                    eval_execute_const_expr(condition, const_env, self.options.fast_math)?
+                else {
+                    return Err(CompileError::new(
+                        "Cycle contract execute `if` condition must be compile-time constant",
+                    ));
+                };
+
+                let choose_then = fold_value_as_bool(&cond)?;
+                let chosen = if choose_then { then_body } else { else_body };
+
+                let mut total = 0u64;
+                for s in chosen {
+                    total = total
+                        .checked_add(self.compile_execute_stmt(s, const_env)?)
+                        .ok_or_else(|| CompileError::new("Cycle count overflow in execute block"))?;
+                }
+                Ok(total)
+            }
+            Stmt::Repeat { times, body } => {
+                let Some(reps) = eval_execute_const_expr(times, const_env, self.options.fast_math)?
+                else {
+                    return Err(CompileError::new(
+                        "Cycle contract execute `repeat` count must be compile-time constant",
+                    ));
+                };
+
+                let reps = fold_value_as_non_negative_int(&reps)?;
+                let mut total = 0u64;
+                for _ in 0..reps {
+                    for s in body {
+                        total = total
+                            .checked_add(self.compile_execute_stmt(s, const_env)?)
+                            .ok_or_else(|| {
+                                CompileError::new("Cycle count overflow in execute block")
+                            })?;
+                    }
+                }
+                Ok(total)
+            }
+            _ => Err(CompileError::new(
+                "Cycle contract execute block supports deterministic statements only",
+            )),
+        }
+    }
+
     fn optimize_code(&mut self) {
         if !should_peephole(&self.options) {
             return;
@@ -551,6 +673,43 @@ fn const_expr_to_value(expr: &Expr) -> Result<Value, CompileError> {
 
 fn is_memory_target(target: &str) -> bool {
     target.starts_with('[') && target.ends_with(']') && target.len() > 2
+}
+
+fn expr_cycle_cost(expr: &Expr, profile: CycleProfile) -> Result<u64, CompileError> {
+    match expr {
+        Expr::Number(_) | Expr::String(_) | Expr::Bool(_) | Expr::Maybe | Expr::Var(_) => Ok(1),
+        Expr::Unary { rhs, .. } => {
+            let rhs_cost = expr_cycle_cost(rhs, profile)?;
+            rhs_cost
+                .checked_add(1)
+                .ok_or_else(|| CompileError::new("Cycle count overflow in expression"))
+        }
+        Expr::Binary { left, op, right } => {
+            let left_cost = expr_cycle_cost(left, profile)?;
+            let right_cost = expr_cycle_cost(right, profile)?;
+            let op_cost = match op {
+                BinaryOp::Mul => match profile {
+                    CycleProfile::Generic => 2,
+                    CycleProfile::AvrLike => 3,
+                    CycleProfile::CortexM0Like => 1,
+                },
+                BinaryOp::Div | BinaryOp::Mod => match profile {
+                    CycleProfile::Generic => 2,
+                    CycleProfile::AvrLike => 4,
+                    CycleProfile::CortexM0Like => 8,
+                },
+                _ => 1,
+            };
+
+            left_cost
+                .checked_add(right_cost)
+                .and_then(|v| v.checked_add(op_cost))
+                .ok_or_else(|| CompileError::new("Cycle count overflow in expression"))
+        }
+        Expr::Call { .. } => Err(CompileError::new(
+            "Cycle contract execute block does not allow function calls",
+        )),
+    }
 }
 
 fn stmt_cycle_cost(stmt: &Stmt, profile: CycleProfile) -> Result<u64, CompileError> {
@@ -671,6 +830,64 @@ fn fold_binary(
         (FoldValue::Maybe, Eq, FoldValue::Maybe) => Ok(Some(FoldValue::Bool(true))),
         (FoldValue::Str(a), Add, FoldValue::Str(b)) => Ok(Some(FoldValue::Str(format!("{}{}", a, b)))),
         _ => Ok(None),
+    }
+}
+
+fn eval_execute_const_expr(
+    expr: &Expr,
+    const_env: &HashMap<String, FoldValue>,
+    fast_math: bool,
+) -> Result<Option<FoldValue>, CompileError> {
+    match expr {
+        Expr::Number(v) => Ok(Some(FoldValue::Int(*v))),
+        Expr::String(v) => Ok(Some(FoldValue::Str(v.clone()))),
+        Expr::Bool(v) => Ok(Some(FoldValue::Bool(*v))),
+        Expr::Maybe => Ok(Some(FoldValue::Maybe)),
+        Expr::Var(name) => Ok(const_env.get(name).cloned()),
+        Expr::Call { .. } => Ok(None),
+        Expr::Unary { op, rhs } => {
+            let Some(rhs) = eval_execute_const_expr(rhs, const_env, fast_math)? else {
+                return Ok(None);
+            };
+            match (op, rhs) {
+                (UnaryOp::Neg, FoldValue::Int(v)) => Ok(Some(FoldValue::Int(-v))),
+                (UnaryOp::Not, FoldValue::Bool(v)) => Ok(Some(FoldValue::Bool(!v))),
+                (UnaryOp::Not, FoldValue::Maybe) => Ok(Some(FoldValue::Maybe)),
+                _ => Ok(None),
+            }
+        }
+        Expr::Binary { left, op, right } => {
+            let Some(left) = eval_execute_const_expr(left, const_env, fast_math)? else {
+                return Ok(None);
+            };
+            let Some(right) = eval_execute_const_expr(right, const_env, fast_math)? else {
+                return Ok(None);
+            };
+            fold_binary(left, *op, right, fast_math)
+        }
+    }
+}
+
+fn fold_value_as_bool(value: &FoldValue) -> Result<bool, CompileError> {
+    match value {
+        FoldValue::Bool(v) => Ok(*v),
+        FoldValue::Int(v) => Ok(*v != 0),
+        FoldValue::Maybe => Ok(false),
+        _ => Err(CompileError::new(
+            "Cycle contract execute `if` expects boolean-compatible constant",
+        )),
+    }
+}
+
+fn fold_value_as_non_negative_int(value: &FoldValue) -> Result<u64, CompileError> {
+    match value {
+        FoldValue::Int(v) if *v >= 0 => Ok(*v as u64),
+        FoldValue::Int(_) => Err(CompileError::new(
+            "Cycle contract execute `repeat` count must be non-negative",
+        )),
+        _ => Err(CompileError::new(
+            "Cycle contract execute `repeat` count must be an integer constant",
+        )),
     }
 }
 

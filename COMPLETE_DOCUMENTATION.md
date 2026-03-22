@@ -99,7 +99,7 @@ Each section below explains purpose, key types/functions, behavior, and "why thi
 - Checks include:
   - Validity of `data` section values (must be literals)
   - Ensures `ref` bindings are used correctly (can't assign to a `ref`), and ownership rules for `own`
-  - Contract constraints: `execute` must contain only assembly/mnemonic-like statements (prevent arbitrary high-level code in `execute` blocks)
+  - Contract constraints: `execute` allows only deterministic statement forms (`instruction`, `own/assign`, `if`, `repeat`), and requires compile-time-constant conditions/counts for `if`/`repeat`
 - Why this matters: catching mistakes early and ensuring contracts remain analyzable at compile-time.
 
 **Compiler: `src/compiler.rs`**
