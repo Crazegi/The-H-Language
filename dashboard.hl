@@ -1,4 +1,169 @@
 section .text:
+  fn area_square(a):
+    return a * a
+
+  fn perimeter_square(a):
+    return 4 * a
+
+  fn area_rectangle(w, h):
+    return w * h
+
+  fn perimeter_rectangle(w, h):
+    return 2 * (w + h)
+
+  fn area_triangle(base, height):
+    return (base * height) / 2
+
+  fn area_circle_pi100(r):
+    return (314 * r * r) / 100
+
+  fn circumference_circle_pi100(r):
+    return (2 * 314 * r) / 100
+
+  fn area_trapezoid(a, b, h):
+    return ((a + b) * h) / 2
+
+  fn area_rhombus(d1, d2):
+    return (d1 * d2) / 2
+
+  fn volume_cube(a):
+    return a * a * a
+
+  fn surface_cube(a):
+    return 6 * a * a
+
+  fn volume_cuboid(l, w, h):
+    return l * w * h
+
+  fn surface_cuboid(l, w, h):
+    return 2 * ((l * w) + (l * h) + (w * h))
+
+  fn volume_cylinder_pi100(r, h):
+    return (314 * r * r * h) / 100
+
+  fn volume_cone_pi100(r, h):
+    return (314 * r * r * h) / 300
+
+  fn surface_sphere_pi100(r):
+    return (4 * 314 * r * r) / 100
+
+  fn volume_sphere_pi100(r):
+    return (4 * 314 * r * r * r) / 300
+
+  fn run_ascii_animation():
+    print:
+      anim_frame: "[=      ]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[==     ]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[===    ]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[ ====  ]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[  ==== ]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[   ====]  H dashboard loading"
+    sleep_ms(90)
+    print:
+      anim_frame: "[  READY]  (^_^)"
+    return 0
+
+  fn sphere_row_1(radius):
+    if radius <= 3:
+      return "    .-^.    "
+    if radius <= 6:
+      return "      .-^^-.      "
+    return "        .-^^^^-.        "
+
+  fn sphere_row_2(radius):
+    if radius <= 3:
+      return "  .-' o '-.  "
+    if radius <= 6:
+      return "    .-'  o  '-.    "
+    return "      .-'   o   '-.      "
+
+  fn sphere_row_3(radius):
+    if radius <= 3:
+      return " /  o O o  \\ "
+    if radius <= 6:
+      return "  /  o O 0 O o  \\  "
+    return "    /  o O 0 @ 0 O o  \\    "
+
+  fn sphere_row_4(radius):
+    if radius <= 3:
+      return "| o O 0 O o |"
+    if radius <= 6:
+      return " | o O 0 @ 0 O o | "
+    return "  | o O 0 @ * @ 0 O o |  "
+
+  fn sphere_row_5(radius):
+    if radius <= 3:
+      return " \\  o O o  / "
+    if radius <= 6:
+      return "  \\  o O 0 O o  /  "
+    return "    \\  o O 0 @ 0 O o  /    "
+
+  fn sphere_row_6(radius):
+    if radius <= 3:
+      return "  '-. o .-'  "
+    if radius <= 6:
+      return "    '-.  o  .-'    "
+    return "      '-.   o   .-'      "
+
+  fn sphere_row_7(radius):
+    if radius <= 3:
+      return "    '-v-'    "
+    if radius <= 6:
+      return "      '-vv-'      "
+    return "        '-vvvv-'        "
+
+  fn sphere_pad(step):
+    if step == 0:
+      return ""
+    if step == 1:
+      return "  "
+    if step == 2:
+      return "    "
+    if step == 3:
+      return "      "
+    if step == 4:
+      return "        "
+    if step == 5:
+      return "      "
+    if step == 6:
+      return "    "
+    return "  "
+
+  fn run_moving_sphere(radius, delay_ms):
+    own step = 0
+    own dir = 1
+    while true:
+      own pad = sphere_pad(step)
+      print:
+        sphere_row_1: pad + sphere_row_1(radius)
+        sphere_row_2: pad + sphere_row_2(radius)
+        sphere_row_3: pad + sphere_row_3(radius)
+        sphere_row_4: pad + sphere_row_4(radius)
+        sphere_row_5: pad + sphere_row_5(radius)
+        sphere_row_6: pad + sphere_row_6(radius)
+        sphere_row_7: pad + sphere_row_7(radius)
+      sleep_ms(delay_ms)
+
+      step = step + dir
+      if step >= 7:
+        step = 7
+        dir = -1
+      if step <= 0:
+        step = 0
+        dir = 1
+
+    return 0
+
   fn main():
     own timestamp_ms = now_ms()
 
@@ -6,16 +171,98 @@ section .text:
     own api_payload = http_get(api_url)
     own api_status = json_parse(api_payload, "status")
 
-    own loc_command = "powershell -NoProfile -Command '$sum=0; Get-ChildItem -Filter *.hl | ForEach-Object { $sum += (Get-Content $_.FullName | Measure-Object -Line).Lines }; $sum'"
+    own os_name = env("OS")
+    own loc_command = "(find src tests examples -type f -name '*.hl' -print0; find src tests examples -type f -name '*.rs' -print0; find src tests examples -type f -name '*.toml' -print0; find src tests examples -type f -name '*.md' -print0; find . -maxdepth 1 -type f -name '*.hl' -print0; find . -maxdepth 1 -type f -name '*.rs' -print0; find . -maxdepth 1 -type f -name '*.toml' -print0; find . -maxdepth 1 -type f -name '*.md' -print0) | xargs -0 cat | wc -l"
+    if contains(os_name, "Windows"):
+      loc_command = "powershell -NoProfile -Command ((Get-ChildItem src,tests,examples -Recurse -File -Include *.hl,*.rs,*.toml,*.md ^| Get-Content) + (Get-Content *.hl,*.rs,*.toml,*.md -ErrorAction SilentlyContinue) ^| Measure-Object -Line).Lines"
+
     own loc_raw = script_run_capture(loc_command)
     own loc_total = to_int(trim(loc_raw))
 
+    own a = 6
+    own b = 10
+    own h = 8
+    own r = 5
+    own l = 9
+
+    own sq_area = area_square(a)
+    own sq_per = perimeter_square(a)
+    own rect_area = area_rectangle(a, b)
+    own rect_per = perimeter_rectangle(a, b)
+    own tri_area = area_triangle(b, h)
+    own circ_area = area_circle_pi100(r)
+    own circ_per = circumference_circle_pi100(r)
+    own trap_area = area_trapezoid(a, b, h)
+    own rho_area = area_rhombus(a, b)
+
+    own cube_vol = volume_cube(a)
+    own cube_surf = surface_cube(a)
+    own cuboid_vol = volume_cuboid(l, b, h)
+    own cuboid_surf = surface_cuboid(l, b, h)
+    own cyl_vol = volume_cylinder_pi100(r, h)
+    own cone_vol = volume_cone_pi100(r, h)
+    own sphere_surf = surface_sphere_pi100(r)
+    own sphere_vol = volume_sphere_pi100(r)
+
     print:
-      app: "dashboard"
+      julia_banner: "julia> using HDashboard"
+      julia_mode: "dev_console"
       timestamp_ms: timestamp_ms
-      api_url: api_url
-      api_status: api_status
-      loc_total: loc_total
-      loc_command: loc_command
+      net_url: api_url
+      net_status: api_status
+      loc_total_lines: loc_total
+
+    print:
+      report_section: "Planimetric equations (pi=3.14 integer model)"
+      square_area_a2: sq_area
+      square_perimeter_4a: sq_per
+      rectangle_area_wh: rect_area
+      rectangle_perimeter_2w_plus_2h: rect_per
+      triangle_area_bh_over_2: tri_area
+      circle_area_pi_r2: circ_area
+      circle_circumference_2pi_r: circ_per
+      trapezoid_area_a_plus_b_times_h_over_2: trap_area
+      rhombus_area_d1_d2_over_2: rho_area
+
+    print:
+      report_section: "Geometric solid equations (pi=3.14 integer model)"
+      cube_volume_a3: cube_vol
+      cube_surface_6a2: cube_surf
+      cuboid_volume_lwh: cuboid_vol
+      cuboid_surface_2lw_lh_wh: cuboid_surf
+      cylinder_volume_pi_r2_h: cyl_vol
+      cone_volume_pi_r2_h_over_3: cone_vol
+      sphere_surface_4pi_r2: sphere_surf
+      sphere_volume_4pi_r3_over_3: sphere_vol
+
+    run_ascii_animation()
+
+    own radius_raw = input("julia> sphere radius (1..9): ")
+    own delay_raw = input("julia> sphere delay ms (40..400): ")
+    own radius = to_int(trim(radius_raw))
+    own delay_ms = to_int(trim(delay_raw))
+
+    if radius < 1:
+      radius = 1
+    if radius > 9:
+      radius = 9
+    if delay_ms < 40:
+      delay_ms = 40
+    if delay_ms > 400:
+      delay_ms = 400
+
+    own launch_terminal_cmd = "start powershell -NoLogo -NoProfile -NoExit -Command $d=" + to_string(delay_ms) + ";$r=" + to_string(radius) + ";$x=0;$dir=1;while($true){Clear-Host;$pad=' ' * ($x*2);Write-Host 'H Sphere Preview';Write-Host ('radius=' + $r + ' delay_ms=' + $d);Write-Host '';Write-Host ($pad + '      .-^^-.');Write-Host ($pad + '    .oOOOo.');Write-Host ($pad + '   ( oOOOo )');Write-Host ($pad + '  ( oO@@@Oo )');Write-Host ($pad + '   ( oOOOo )');Write-Host ($pad + '    .oOOOo.');Write-Host ($pad + '      .-..-.');Start-Sleep -Milliseconds $d;$x=$x+$dir;if($x -ge 8){$dir=-1};if($x -le 0){$dir=1}}"
+    script_run(launch_terminal_cmd)
+
+    print:
+      report_section: "Detailed moving sphere with user constants"
+      user_radius: radius
+      user_delay_ms: delay_ms
+      note: "animation runs in continuous loop; stop with Ctrl+C"
+
+    run_moving_sphere(radius, delay_ms)
+
+    print:
+      next_hint: "try changing a,b,h,r,l and sphere constants for your own problems"
 
     return 0

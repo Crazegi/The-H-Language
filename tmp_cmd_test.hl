@@ -1,0 +1,8 @@
+section .text:
+  fn main():
+    own cmd = "powershell -NoProfile -Command (Get-ChildItem -Filter *.hl ^| Get-Content ^| Measure-Object -Line).Lines"
+    own raw = script_run_capture(cmd)
+    print:
+      cmd: cmd
+      raw: raw
+    return 0
