@@ -873,6 +873,32 @@ fn semantic_allows_interrupt_port_access_when_yielded() {
     analyze(&program).expect("yielded interrupt access should pass semantic analysis");
 }
 
+  // Motivated by examples/flagship/flagship.hl (Flight Data Recorder):
+  // interrupt emergency-stop writes to a shared port must be accepted when access
+  // is granted via a yield window from the owning function.
+#[test]
+fn semantic_allows_interrupt_zero_write_via_yield_grant() {
+    let src = r#"section .text:
+  interrupt fn irq_collision_detect():
+    own kill = 0
+    mov [fc_port], kill
+    return kill
+
+  fn telemetry_commit(value):
+    own [fc_port]
+    own r1 = value
+    yield [fc_port] to irq_collision_detect:
+      mov [fc_port], r1
+    return r1
+
+  fn main():
+    return telemetry_commit(7)
+"#;
+
+    let program = parse_source(src).expect("parse should pass");
+    analyze(&program).expect("interrupt zero-write should be allowed when yielded access is granted");
+}
+
 #[test]
 fn semantic_rejects_interrupt_port_access_without_yield() {
     let src = r#"section .text:

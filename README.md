@@ -655,6 +655,7 @@ cargo run --bin hl-lex -- --profile-doctor examples/cycle_contracts.hl --cycle-p
 - Dedicated Cycle Contracts showcase: `examples/cycle_contracts.hl`
 - Flagship end-to-end showcase: `examples/flagship/flagship.hl`
 - Special-folder hard real-time flagship: `examples/flagship/flagship_realtime.hl`
+- Interactive Flight Data Recorder showcase: `examples/flagship/flagship.hl`
 
 Use the contracts showcase to compare profiles on the same source:
 

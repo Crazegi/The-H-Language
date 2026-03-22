@@ -1,72 +1,36 @@
 section .data:
-  build_label: "H-FLAGSHIP"
-  target_profile: "generic"
+  project_name: "H Flight Data Recorder"
   uncertainty: maybe
-  min_samples: 1
-  max_samples: 12
 
 section .text:
   import math
   import script
   import gpio
-  import timer
+  import uart
   import watchdog
+  import timer
 
-  struct Telemetry:
-    rpm: int
+  struct SensorFrame:
+    altitude: int
+    velocity: int
+    heading: int
     temp: int
-    status: string
 
-  interrupt fn irq_guard():
-    print:
-      event: "irq_guard"
-      note: "interrupt grant consumed"
-    return
+  struct MissionLog:
+    frames: int
+    anomalies: int
+    peak_alt: int
+    peak_vel: int
 
-  fn deterministic_window(base, delta):
-    own r1 = base
-    own r2 = delta
-    ref [port_a]
-    contract:
-      cycles: 5
-      on_underflow: "pad_nop"
-      on_overflow: "compile_error"
-    execute:
-      add r1, r2
-      mul r1, r2
-      mov [port_a], r1
-    return r1
+  struct Alert:
+    code: string
+    severity: int
+    timestamp: int
 
-  fn shared_irq_window(seed):
-    own [port_a]
-    own r1 = seed
-    yield [port_a] to irq_guard:
-      mov [port_a], r1
-      add r1, 1
-      mov [port_a], r1
-    return r1
-
-  fn render_status(rpm, temp, status):
-    own snapped_temp = math.snap(temp, 5)
-    own heading = math.atan2(1, 1)
-    own gate = phase(temp > 80, uncertainty)
-    own stable = collapse(not gate)
-    own line = format("{} profile={} rpm={} temp={} heading={} status={} stable={}", build_label, target_profile, rpm, snapped_temp, heading, status, stable)
-    return line
-
-  fn summarize_lines(text):
-    own lines = split_lines(text)
-    own count = 0
-    own total_chars = 0
-    for line in lines:
-      if len(line) == 0:
-        continue
-      add count, 1
-      add total_chars, len(line)
-      if count == 3:
-        break
-    own packed = format("{}:{}", count, total_chars)
-    return packed
+  interrupt fn irq_collision_detect():
+    own kill = 0
+    mov [fc_port], kill
+    return kill
 
   fn ask_int(prompt, fallback):
     own raw = input(prompt)
@@ -75,144 +39,171 @@ section .text:
       return fallback
     return to_int(cleaned)
 
-  fn clamp_samples(n):
-    own value = n
-    if value < min_samples:
-      value = min_samples
-    if value > max_samples:
-      value = max_samples
-    return value
+  fn clamp_target_alt(v, max_alt):
+    own out = v
+    if out < 500:
+      out = 500
+    if out > max_alt:
+      out = max_alt
+    return out
 
-  fn classify_health(temp, avg_temp, jitter):
-    if temp >= 90 or avg_temp >= 86:
-      return "critical"
-    if temp >= 80 or jitter >= 8:
-      return "warning"
-    return "nominal"
+  fn telemetry_commit(altitude, velocity):
+    own [fc_port]
+    own r1 = altitude
+    own r2 = velocity
 
-  fn compute_rpm(seed):
-    own rpm = deterministic_window(seed, 2)
-    own bus = shared_irq_window(4)
-    add rpm, bus
-    return rpm
+    // Profile-sensitive window: generic=3, avr-like=4, cortex-m0-like=2 for mul+mov
+    contract:
+      cycles: 3
+      on_underflow: "pad_nop"
+      on_overflow: "compile_error"
+    execute:
+      mul r1, r2
+      mov [fc_port], r1
 
-  fn compute_temp():
-    own temp = 67
-    while temp < 88:
-      add temp, 3
-      if temp == 79:
-        continue
-      if temp > 86:
-        break
-    return temp
+    yield [fc_port] to irq_collision_detect:
+      mov [fc_port], r1
 
-  fn compute_status(temp):
-    own status = "nominal"
-    if temp > 85:
-      status = "hot"
-    return status
+    return r1
+
+  fn detect_anomaly(altitude, velocity, temp, critical_temp, stall_velocity, max_alt):
+    own uncertain_temp = phase(temp >= critical_temp, uncertainty)
+    own base_alarm = velocity < stall_velocity or altitude > max_alt
+    own final_alarm = collapse(uncertain_temp or base_alarm)
+    return final_alarm
 
   fn main():
-    own timestamp_ms = now_ms()
+    const MAX_ALT = 4000
+    const STALL_VELOCITY = 12
+    const CRITICAL_TEMP = 95
+    const MAX_ANOMALIES = 5
+
+    own mission_id = input("mission id: ")
+    own pilot = input("pilot name: ")
+    own target_raw = ask_int("target altitude (500..4000): ", 1500)
+    own target_alt = clamp_target_alt(target_raw, MAX_ALT)
+
+    own start_ms = now_ms()
     own cwd = script.cwd()
     own args_n = script.args_count()
     own os_name = env("OS")
 
-    own operator = input("operator id: ")
-    own samples_req = ask_int("sample count (1..12): ", 6)
-    own base_seed = ask_int("base seed (1..50): ", 10)
+    own led = gpio.claim("[port_a]")
+    unused own led_cfg = gpio.mode(led, "out")
+    unused own armed_led = gpio.write(led, 1)
 
-    own sample_count = clamp_samples(samples_req)
-    own seed = base_seed
-    if seed < 1:
-      seed = 1
-    if seed > 50:
-      seed = 50
+    own bus = uart.new("uart1", 115200)
+    own wd = watchdog.new("wd1", 250)
+    own clock = timer.new("mission", 1000)
+    unused own clock_start = timer.start(clock, 20)
 
-    own rpm = compute_rpm(10)
-    own temp = compute_temp()
+    script.mkdir_all("logs")
+    write_text("logs/frames.txt", "")
+    write_text("logs/report.txt", format("mission={} pilot={} project={}\n", mission_id, pilot, project_name))
 
-    own sample_idx = 0
-    own sum_temp = 0
-    own min_temp = 9999
-    own max_temp = -9999
-    while sample_idx < sample_count:
-      own dyn = compute_temp()
-      own offset = sample_idx % 4
-      dyn = dyn - 4
-      add dyn, offset
-      if dyn < min_temp:
-        min_temp = dyn
-      if dyn > max_temp:
-        max_temp = dyn
-      add sum_temp, dyn
-      add sample_idx, 1
+    own frames_ok = 0
+    own anomalies = 0
+    own peak_alt = 0
+    own peak_vel = 0
 
-    own avg_temp = sum_temp / sample_count
-    own jitter = max_temp - min_temp
-    own status = classify_health(temp, avg_temp, jitter)
+    for i in 20:
+      unused own wd_tick = watchdog.feed(wd)
 
-    own telem = Telemetry(rpm, temp, status)
-    own message = render_status(telem.rpm, telem.temp, telem.status)
+      own maybe_read = phase(i % 7 == 0, uncertainty)
+      if maybe_read == maybe:
+        continue
 
-    own timer0 = timer.new("loop0", 1000)
-    unused own started = timer.start(timer0, 5)
-    own wd = watchdog.new("wd0", 500)
-    unused own fed = watchdog.feed(wd)
+      own altitude = target_alt + (i * 9)
+      own velocity = 20 + (i % 15)
+      own heading = (i * 17) % 360
+      own temp = 62 + (i % 38)
 
-    own cmd = format("echo {}", message)
-    own captured = script.run_capture(cmd)
-    own summary = summarize_lines(captured)
-    own parts = split(summary, ":")
-    own non_empty_lines = to_int(array_get(parts, 0))
-    own total_chars = to_int(array_get(parts, 1))
+      own frame = SensorFrame(altitude, velocity, heading, temp)
+      own alarm = detect_anomaly(frame.altitude, frame.velocity, frame.temp, CRITICAL_TEMP, STALL_VELOCITY, MAX_ALT)
 
-    own pin = gpio.claim("[port_a]")
-    unused own pin_cfg = gpio.mode(pin, "out")
-    own wrote = gpio.write(pin, 1)
+      if frame.altitude > peak_alt:
+        peak_alt = frame.altitude
+      if frame.velocity > peak_vel:
+        peak_vel = frame.velocity
 
-    own pulse = deterministic_window(seed % 8 + 2, 2)
-    own signal = phase(non_empty_lines > 0 and wrote, uncertainty)
-    own healthy = wrote and non_empty_lines > 0
+      own health = "nominal"
+      if alarm:
+        health = "anomaly"
+        add anomalies, 1
 
-    if healthy:
-      own score = pulse
-      add score, non_empty_lines
-      add score, total_chars
-      add score, sample_count
-      add score, avg_temp
+        own alert = Alert("FLT-ANOM", 2, now_ms())
+        own alert_line = format("alert code={} severity={} ts={} i={} alt={} vel={} temp={}\n", alert.code, alert.severity, alert.timestamp, i, frame.altitude, frame.velocity, frame.temp)
+        append_text("logs/report.txt", alert_line)
+      else:
+        if frame.temp > 85:
+          health = "warm"
 
-      own digest = format("op={} args={} cwd={} ts={} os={}", operator, args_n, cwd, timestamp_ms, os_name)
+      own commit_value = telemetry_commit(frame.altitude, frame.velocity)
+      own frame_line = format("t={} alt={} vel={} hdg={} temp={} status={} commit={}\n", i, frame.altitude, frame.velocity, frame.heading, frame.temp, health, commit_value)
+      append_text("logs/frames.txt", frame_line)
+      unused own tx = uart.write(bus, frame_line)
+
+      add frames_ok, 1
+
+      if anomalies > MAX_ANOMALIES:
+        break
+
+    own mission = MissionLog(frames_ok, anomalies, peak_alt, peak_vel)
+
+    own duration_ms = now_ms() - start_ms
+    own status = "nominal"
+    if mission.anomalies > 0:
+      status = "degraded"
+
+    if mission.anomalies > MAX_ANOMALIES:
+      status = "emergency"
+      unused own disarm_led = gpio.write(led, 0)
+      append_text("logs/report.txt", "emergency landing triggered\n")
+
       print:
-        demo: "flagship"
-        profile: target_profile
-        status: "healthy"
-        message: message
-        digest: digest
-        samples: sample_count
-        min_temp: min_temp
-        avg_temp: avg_temp
-        max_temp: max_temp
-        jitter: jitter
-        lines: non_empty_lines
-        chars: total_chars
-        signal: signal
-        pulse: pulse
-        score: score
-      return score
+        mission: mission_id
+        pilot: pilot
+        frames: mission.frames
+        anomalies: mission.anomalies
+        peak_alt: mission.peak_alt
+        peak_vel: mission.peak_vel
+        duration_ms: duration_ms
+        status: status
+        log: "logs/report.txt"
+      return -99
+
+    own sort_cmd = "sort logs/frames.txt"
+    if contains(os_name, "Windows"):
+      sort_cmd = "powershell -NoProfile -Command \"Get-Content logs/frames.txt | Sort-Object\""
+    own sorted_lines = script.run_capture_lines(sort_cmd)
+
+    own top = 0
+    for line in sorted_lines:
+      if len(trim(line)) == 0:
+        continue
+      add top, 1
+      print:
+        peak_line: line
+      if top == 5:
+        break
+
+    own score = mission.frames * 10
+    score = score - (mission.anomalies * 25)
+    score = score + (mission.peak_alt / 100)
+    score = score + mission.peak_vel
+
+    own report = format("mission={} pilot={} target={} frames={} anomalies={} peak_alt={} peak_vel={} duration_ms={} status={} score={} cwd={} args={} os={}\n", mission_id, pilot, target_alt, mission.frames, mission.anomalies, mission.peak_alt, mission.peak_vel, duration_ms, status, score, cwd, args_n, os_name)
+    append_text("logs/report.txt", report)
 
     print:
-      demo: "flagship"
-      profile: target_profile
-      status: "fallback"
-      message: message
-      samples: sample_count
-      min_temp: min_temp
-      avg_temp: avg_temp
-      max_temp: max_temp
-      jitter: jitter
-      lines: non_empty_lines
-      chars: total_chars
-      signal: signal
-      pulse: pulse
-    return 0
+      mission: mission_id
+      pilot: pilot
+      frames: mission.frames
+      anomalies: mission.anomalies
+      peak_alt: mission.peak_alt
+      peak_vel: mission.peak_vel
+      duration_ms: duration_ms
+      status: status
+      log: "logs/report.txt"
+
+    return score
