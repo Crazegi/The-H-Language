@@ -1,0 +1,22 @@
+section .text:
+  import gpio
+  import uart
+
+  fn main():
+    own [port_a]
+    own serial = uart.new(0, 115200)
+    gpio.claim("[port_a]")
+    gpio.mode(8, 1)
+
+    repeat 3:
+      gpio.write(8, 1)
+      own level = gpio.read(8)
+      uart.write(serial, level)
+      sleep_ms(200)
+
+      gpio.write(8, 0)
+      own line = uart.read(serial)
+      uart.write(serial, line)
+      sleep_ms(200)
+
+    return 0

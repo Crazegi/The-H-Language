@@ -60,6 +60,88 @@
       ],
       "group": "build",
       "problemMatcher": []
+    },
+    {
+      "label": "H-Embedded: Build ESP32-C3 sample",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "h-embedded/Cargo.toml",
+        "--",
+        "h-embedded/examples/blink_embedded.hl",
+        "--board",
+        "esp32-c3"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "H-Embedded: Build ESP32-C3 firmware (ESP-IDF)",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "h-embedded/Cargo.toml",
+        "--",
+        "h-embedded/examples/blink_embedded.hl",
+        "--board",
+        "esp32-c3",
+        "--build"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "H-Embedded: Flash ESP32-C3 firmware (auto port)",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "h-embedded/Cargo.toml",
+        "--",
+        "h-embedded/examples/blink_embedded.hl",
+        "--board",
+        "esp32-c3",
+        "--flash"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "H-Embedded: Build Pi Pico sample",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "h-embedded/Cargo.toml",
+        "--",
+        "h-embedded/examples/blink_embedded.hl",
+        "--board",
+        "pi-pico"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "H-Embedded: Build Arduino Uno sample",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "h-embedded/Cargo.toml",
+        "--",
+        "h-embedded/examples/blink_embedded.hl",
+        "--board",
+        "arduino-uno"
+      ],
+      "group": "build",
+      "problemMatcher": []
     }
   ]
 }

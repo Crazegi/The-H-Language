@@ -218,6 +218,7 @@ High-level structure (kept intentionally compact):
 - `tests/`: parser/semantic/runtime/compiler integration tests.
 - `examples/`: runnable H samples.
 - `vscode-h-language/`: VS Code language support package.
+- `h-embedded/`: separate embedded-focused H variant workspace for MCU/Wokwi targets (real ESP32-C3 ESP-IDF emission + minimal GPIO/UART runtime).
 - `wokwi-profiles/`: reusable Wokwi board configs (`wokwi.toml` + `diagram.json`).
 - `target/`: Cargo build output (generated).
 - root docs: `README.md`, `WOKWI_SETUP.md`, `COMPLETE_DOCUMENTATION.md`, `COMPLETE_DOCUMENTATION_PL.md`.

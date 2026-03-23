@@ -47,3 +47,37 @@ Create a minimal embedded runtime backend for one board first (suggested: ESP32-
 2. Provide board HAL bindings for GPIO/UART/timer builtins.
 3. Emit board-compatible firmware (`.elf`/`.bin`) into `target/wokwi/esp32-c3/`.
 4. Use current profile files unchanged to run in Wokwi.
+
+## New separate microcontroller workspace
+
+There is now a dedicated directory for the MCU-focused variant:
+
+- `h-embedded/`
+
+Quick run:
+
+```powershell
+cargo run --manifest-path h-embedded/Cargo.toml -- h-embedded/examples/blink_embedded.hl --board esp32-c3
+```
+
+This command validates embedded-safe language usage and writes board output files under `target/wokwi/<board>/`.
+
+Build real ESP32-C3 firmware with ESP-IDF:
+
+```powershell
+cargo run --manifest-path h-embedded/Cargo.toml -- h-embedded/examples/blink_embedded.hl --board esp32-c3 --build
+```
+
+Auto flash to a connected ESP32-C3 board:
+
+```powershell
+cargo run --manifest-path h-embedded/Cargo.toml -- h-embedded/examples/blink_embedded.hl --board esp32-c3 --flash --port COM5
+```
+
+Auto flash + serial monitor:
+
+```powershell
+cargo run --manifest-path h-embedded/Cargo.toml -- h-embedded/examples/blink_embedded.hl --board esp32-c3 --flash --monitor --port COM5
+```
+
+Note: build/flash/monitor requires `idf.py` from ESP-IDF in PATH.
