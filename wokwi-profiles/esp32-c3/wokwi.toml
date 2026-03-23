@@ -1,0 +1,5 @@
+[wokwi]
+version = 1
+firmware = 'target/wokwi/esp32-c3/firmware.elf'
+elf = 'target/wokwi/esp32-c3/firmware.elf'
+rfc2217ServerPort = 4000

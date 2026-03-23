@@ -1,0 +1,65 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Wokwi: Select ESP32-C3 profile",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/select_wokwi_profile.ps1",
+        "-Board",
+        "esp32-c3"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Wokwi: Select Pi Pico profile",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/select_wokwi_profile.ps1",
+        "-Board",
+        "pi-pico"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Wokwi: Select Arduino Uno profile",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/select_wokwi_profile.ps1",
+        "-Board",
+        "arduino-uno"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "H: Native host compile sample",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "run",
+        "--",
+        "--native",
+        "examples/sample.hl",
+        "--out",
+        "target/h-sample-native.exe"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

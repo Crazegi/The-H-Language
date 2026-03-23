@@ -1,5 +1,6 @@
 {
   "recommendations": [
-    "crazegi.h-language-support"
+    "crazegi.h-language-support",
+    "wokwi.wokwi-vscode"
   ]
 }

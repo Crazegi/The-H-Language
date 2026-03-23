@@ -218,8 +218,9 @@ High-level structure (kept intentionally compact):
 - `tests/`: parser/semantic/runtime/compiler integration tests.
 - `examples/`: runnable H samples.
 - `vscode-h-language/`: VS Code language support package.
+- `wokwi-profiles/`: reusable Wokwi board configs (`wokwi.toml` + `diagram.json`).
 - `target/`: Cargo build output (generated).
-- root docs: `README.md`, `COMPLETE_DOCUMENTATION.md`, `COMPLETE_DOCUMENTATION_PL.md`.
+- root docs: `README.md`, `WOKWI_SETUP.md`, `COMPLETE_DOCUMENTATION.md`, `COMPLETE_DOCUMENTATION_PL.md`.
 
 Tree hygiene policy:
 

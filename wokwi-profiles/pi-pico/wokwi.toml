@@ -1,0 +1,5 @@
+[wokwi]
+version = 1
+firmware = 'target/wokwi/pi-pico/firmware.uf2'
+elf = 'target/wokwi/pi-pico/firmware.elf'
+rfc2217ServerPort = 4001

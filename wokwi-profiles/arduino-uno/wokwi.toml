@@ -1,0 +1,5 @@
+[wokwi]
+version = 1
+firmware = 'target/wokwi/arduino-uno/firmware.hex'
+elf = 'target/wokwi/arduino-uno/firmware.elf'
+rfc2217ServerPort = 4002
